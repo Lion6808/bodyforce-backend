@@ -1,4 +1,3 @@
-const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -8,9 +7,7 @@ const path = require("path");
 const bcrypt = require("bcrypt");
 
 const app = express();
-const port = 3001;
-
-// --- Lecture du certificat SSL local ---
+const port = process.env.PORT || 3001;
 
 // --- Middleware global ---
 app.use(cors());
@@ -33,11 +30,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    if (authHeader) {
-      req.user = JSON.parse(authHeader);
-    } else {
-      req.user = null;
-    }
+    req.user = authHeader ? JSON.parse(authHeader) : null;
   } catch (e) {
     console.error("Erreur parsing Authorization:", e);
     req.user = null;
@@ -84,8 +77,7 @@ app.post("/api/login", (req, res) => {
     return res.status(400).json({ error: "Champs requis manquants" });
 
   usersDb.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
-    if (err || !user)
-      return res.status(401).json({ error: "Utilisateur inconnu" });
+    if (err || !user) return res.status(401).json({ error: "Utilisateur inconnu" });
 
     bcrypt.compare(password, user.passwordHash, (err, match) => {
       if (err || !match)
@@ -98,13 +90,8 @@ app.post("/api/login", (req, res) => {
 
 // --- Gestion des utilisateurs ---
 app.get("/api/users", isAdmin, (req, res) => {
-  console.log("Route GET /api/users appelée par :", req.user);
   usersDb.all("SELECT id, username, role FROM users", (err, rows) => {
-    if (err) {
-      console.error("Erreur SQL /api/users:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log("Utilisateurs retournés :", rows.length);
+    if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
@@ -115,11 +102,14 @@ app.post("/api/users", isAdmin, async (req, res) => {
     return res.status(400).json({ error: "Tous les champs sont requis" });
 
   const hash = await bcrypt.hash(password, 10);
-  usersDb.run("INSERT INTO users (username, passwordHash, role) VALUES (?, ?, ?)",
-    [username, hash, role], function (err) {
+  usersDb.run(
+    "INSERT INTO users (username, passwordHash, role) VALUES (?, ?, ?)",
+    [username, hash, role],
+    function (err) {
       if (err) return res.status(400).json({ error: err.message });
       res.json({ id: this.lastID, username, role });
-    });
+    }
+  );
 });
 
 app.put("/api/users/:id", async (req, res) => {
@@ -152,91 +142,20 @@ app.delete("/api/users/:id", isAdmin, (req, res) => {
   });
 });
 
-// --- Route GET /api/members --- 
+// --- Membres ---
 app.get("/api/members", (req, res) => {
   db.all("SELECT * FROM members", (err, rows) => {
-    if (err) {
-      console.error("Erreur requête SQL :", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log("Membres récupérés :", rows.length);
+    if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
-// --- Route GET /api/presences --- 
-app.get("/api/presences", (req, res) => {
-  db.all("SELECT * FROM presences", (err, rows) => {
-    if (err) {
-      console.error("Erreur lors de la récupération des présences :", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
-});
-
-
-
-// --- Route PUT /api/members/:id ---
-app.put("/api/members/:id", (req, res) => {
-  const id = req.params.id;
+app.post("/api/members", (req, res) => {
   const {
-    name,
-    firstName,
-    birthdate,
-    gender,
-    address,
-    phone,
-    mobile,
-    email,
-    subscriptionType,
-    startDate,
-    endDate,
-    badgeId,
-    files,
-    photo
-  } = req.body;
-
-  const sql = \`
-    UPDATE members SET
-      name = ?, firstName = ?, birthdate = ?, gender = ?,
-      address = ?, phone = ?, mobile = ?, email = ?,
-      subscriptionType = ?, startDate = ?, endDate = ?,
-      badgeId = ?, files = ?, photo = ?
-    WHERE id = ?
-  \`;
-
-  db.run(sql, [
     name, firstName, birthdate, gender,
     address, phone, mobile, email,
     subscriptionType, startDate, endDate,
-    badgeId, JSON.stringify(files || []), photo, id
-  ], function (err) {
-    if (err) {
-      console.error("Erreur UPDATE membre :", err.message);
-      return res.status(500).json({ error: "Erreur lors de la mise à jour du membre." });
-    }
-    res.json({ success: true });
-  });
-});
-
-// --- Route POST /api/members ---
-app.post("/api/members", (req, res) => {
-  const {
-    name,
-    firstName,
-    birthdate,
-    gender,
-    address,
-    phone,
-    mobile,
-    email,
-    subscriptionType,
-    startDate,
-    endDate,
-    badgeId,
-    files,
-    photo
+    badgeId, files, photo
   } = req.body;
 
   const sql = `
@@ -254,15 +173,49 @@ app.post("/api/members", (req, res) => {
     subscriptionType, startDate, endDate,
     badgeId, JSON.stringify(files || []), photo
   ], function (err) {
-    if (err) {
-      console.error("Erreur INSERT membre :", err.message);
-      return res.status(500).json({ error: "Erreur lors de la création du membre." });
-    }
+    if (err) return res.status(500).json({ error: "Erreur lors de la création du membre." });
     res.json({ id: this.lastID });
   });
 });
 
-// --- Lancement HTTPS ---
-https.createServer(credentials, app).listen(port, () => {
-  console.log(`Serveur HTTPS lancé sur https://localhost:${port}`);
+app.put("/api/members/:id", (req, res) => {
+  const id = req.params.id;
+  const {
+    name, firstName, birthdate, gender,
+    address, phone, mobile, email,
+    subscriptionType, startDate, endDate,
+    badgeId, files, photo
+  } = req.body;
+
+  const sql = `
+    UPDATE members SET
+      name = ?, firstName = ?, birthdate = ?, gender = ?,
+      address = ?, phone = ?, mobile = ?, email = ?,
+      subscriptionType = ?, startDate = ?, endDate = ?,
+      badgeId = ?, files = ?, photo = ?
+    WHERE id = ?
+  `;
+
+  db.run(sql, [
+    name, firstName, birthdate, gender,
+    address, phone, mobile, email,
+    subscriptionType, startDate, endDate,
+    badgeId, JSON.stringify(files || []), photo, id
+  ], function (err) {
+    if (err) return res.status(500).json({ error: "Erreur lors de la mise à jour du membre." });
+    res.json({ success: true });
+  });
+});
+
+// --- Présences ---
+app.get("/api/presences", (req, res) => {
+  db.all("SELECT * FROM presences", (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// --- Lancement simple (Render utilise HTTPS automatiquement) ---
+app.listen(port, () => {
+  console.log(`Serveur lancé sur le port ${port}`);
 });
