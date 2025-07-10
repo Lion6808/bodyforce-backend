@@ -274,12 +274,9 @@ app.put("/api/members/:id", (req, res) => {
   });
 });
 
-// --- Lancement HTTPS ---
-- https.createServer(credentials, app).listen(port, () => {
--   console.log(`Serveur HTTPS lancé sur https://localhost:${port}`);
-- });
+/// --- Lancement HTTPS ---
+https.createServer(credentials, app).listen(port, "0.0.0.0", () => {
+  console.log(`Serveur HTTPS lancé sur https://0.0.0.0:${port}`);
+});
 
-+ https.createServer(credentials, app).listen(port, "0.0.0.0", () => {
-+   console.log(`Serveur HTTPS lancé sur https://0.0.0.0:${port}`);
-+ });
 
