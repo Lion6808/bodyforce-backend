@@ -1,79 +1,58 @@
-const path = require("path");
-const sqlite3 = require("sqlite3").verbose();
+
 const XLSX = require("xlsx");
-const fileDialog = require("node-file-dialog");
+const sqlite3 = require("sqlite3").verbose();
 
-// Ouvrir l'explorateur pour sélectionner le fichier Excel
-fileDialog({ type: 'open-file', accept: '.xlsx' })
-  .then((files) => {
-    const excelFilePath = files[0];
-    console.log("Fichier sélectionné :", excelFilePath);
+/**
+ * Importe les présences depuis un fichier Excel buffer
+ * @param {Buffer} fileBuffer - Le contenu du fichier Excel
+ * @param {string} dbPath - Chemin vers la base de données SQLite
+ * @returns {Promise<number>} - Nombre de présences importées
+ */
+async function importExcelEntries(fileBuffer, dbPath) {
+  const presenceWorkbook = XLSX.read(fileBuffer, { type: "buffer" });
+  const presenceSheet = presenceWorkbook.Sheets[presenceWorkbook.SheetNames[0]];
+  const presenceData = XLSX.utils.sheet_to_json(presenceSheet);
 
-    // Charger le fichier Excel des présences
-    const presenceWorkbook = XLSX.readFile(excelFilePath);
-    const presenceSheet = presenceWorkbook.Sheets[presenceWorkbook.SheetNames[0]];
-    const presenceData = XLSX.utils.sheet_to_json(presenceSheet);
+  const db = new sqlite3.Database(dbPath);
 
-    // Préparer la base SQLite
-    const db = new sqlite3.Database("./club.db");
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run(\`
+        CREATE TABLE IF NOT EXISTS presences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          badgeId TEXT,
+          timestamp TEXT,
+          UNIQUE(badgeId, timestamp)
+        )
+      \`);
 
-    // Créer la table des présences si elle n'existe pas
-    const createTable = `
-      CREATE TABLE IF NOT EXISTS presences (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        badgeId TEXT,
-        timestamp TEXT
-      )
-    `;
-
-    db.run(createTable, (err) => {
-      if (err) {
-        console.error("Erreur création table presences:", err.message);
-        db.close();
-        return;
-      }
-
-      // Insérer les données de présence
-      const insertPresenceStmt = db.prepare(`INSERT INTO presences (badgeId, timestamp) VALUES (?, ?)`);
-      let presenceInserted = 0;
+      const insert = db.prepare(\`INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)\`);
+      let inserted = 0;
 
       presenceData.forEach((entry) => {
         const badgeId = entry["Qui"]?.toString();
         const rawDate = entry["Quand"];
-
         if (!badgeId || !rawDate) return;
 
         const parts = rawDate.match(/(\d{2})\/(\d{2})\/(\d{2})\s(\d{2}):(\d{2})/);
-        if (!parts) {
-          console.warn("Date invalide ignorée :", rawDate);
-          return;
-        }
+        if (!parts) return;
 
         const [ , day, month, year, hour, minute ] = parts;
-        const fullDate = new Date(`20${year}-${month}-${day}T${hour}:${minute}:00`);
-
-        if (isNaN(fullDate)) {
-          console.warn("Date invalide ignorée :", rawDate);
-          return;
-        }
+        const fullDate = new Date(\`20\${year}-\${month}-\${day}T\${hour}:\${minute}:00\`);
+        if (isNaN(fullDate)) return;
 
         const timestamp = fullDate.toISOString();
-
-        insertPresenceStmt.run(badgeId, timestamp, (err) => {
-          if (err) {
-            console.error("Erreur insertion présence:", err.message);
-          } else {
-            presenceInserted++;
-          }
+        insert.run(badgeId, timestamp, function (err) {
+          if (!err && this.changes > 0) inserted++;
         });
       });
 
-      insertPresenceStmt.finalize(() => {
-        console.log(`Présences importées: ${presenceInserted}`);
+      insert.finalize(() => {
         db.close();
+        resolve(inserted);
       });
     });
-  })
-  .catch((err) => {
-    console.error("Aucun fichier sélectionné ou erreur:", err.message);
   });
+}
+
+module.exports = importExcelEntries;
