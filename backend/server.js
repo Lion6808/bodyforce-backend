@@ -1,5 +1,3 @@
-const https = require("https");
-const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -9,12 +7,7 @@ const path = require("path");
 const bcrypt = require("bcrypt");
 
 const app = express();
-const port = 3001;
-
-// --- Lecture du certificat SSL local ---
-const privateKey = fs.readFileSync("./cert/key.pem", "utf8");
-const certificate = fs.readFileSync("./cert/cert.pem", "utf8");
-const credentials = { key: privateKey, cert: certificate };
+const port = process.env.PORT || 3001;
 
 // --- Middleware global ---
 app.use(cors());
@@ -108,7 +101,6 @@ app.get("/api/users", isAdmin, (req, res) => {
       console.error("Erreur SQL /api/users:", err.message);
       return res.status(500).json({ error: err.message });
     }
-    console.log("Utilisateurs retournés :", rows.length);
     res.json(rows);
   });
 });
@@ -168,7 +160,6 @@ app.get("/api/members", (req, res) => {
       files: JSON.parse(row.files || '[]'),
       etudiant: !!row.etudiant
     }));
-    console.log("Membres récupérés :", members.length);
     res.json(members);
   });
 });
@@ -187,21 +178,10 @@ app.get("/api/presences", (req, res) => {
 // --- Route POST /api/members ---
 app.post("/api/members", (req, res) => {
   const {
-    name,
-    firstName,
-    birthdate,
-    gender,
-    address,
-    phone,
-    mobile,
-    email,
-    subscriptionType,
-    startDate,
-    endDate,
-    badgeId,
-    files,
-    photo,
-    etudiant
+    name, firstName, birthdate, gender,
+    address, phone, mobile, email,
+    subscriptionType, startDate, endDate,
+    badgeId, files, photo, etudiant
   } = req.body;
 
   const sql = `
@@ -232,21 +212,10 @@ app.post("/api/members", (req, res) => {
 app.put("/api/members/:id", (req, res) => {
   const id = req.params.id;
   const {
-    name,
-    firstName,
-    birthdate,
-    gender,
-    address,
-    phone,
-    mobile,
-    email,
-    subscriptionType,
-    startDate,
-    endDate,
-    badgeId,
-    files,
-    photo,
-    etudiant
+    name, firstName, birthdate, gender,
+    address, phone, mobile, email,
+    subscriptionType, startDate, endDate,
+    badgeId, files, photo, etudiant
   } = req.body;
 
   const sql = `
@@ -274,9 +243,7 @@ app.put("/api/members/:id", (req, res) => {
   });
 });
 
-/// --- Lancement HTTPS ---
-https.createServer(credentials, app).listen(port, "0.0.0.0", () => {
-  console.log(`Serveur HTTPS lancé sur https://0.0.0.0:${port}`);
+// --- Lancement Render-compatible ---
+app.listen(port, () => {
+  console.log(`Serveur lancé sur le port ${port}`);
 });
-
-
