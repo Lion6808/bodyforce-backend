@@ -243,6 +243,39 @@ app.put("/api/members/:id", (req, res) => {
   });
 });
 
+
+// --- Route POST /api/import-events (ajoutée uniquement cette partie) ---
+const fs = require("fs");
+const xlsx = require("xlsx");
+
+app.post("/api/import-events", isAdmin, (req, res) => {
+  const excelPath = path.join(__dirname, "upload", "presences.xlsx");
+  if (!fs.existsSync(excelPath)) {
+    return res.status(404).json({ error: "Fichier Excel non trouvé (upload/presences.xlsx)" });
+  }
+
+  const workbook = xlsx.readFile(excelPath);
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const data = xlsx.utils.sheet_to_json(sheet);
+
+  let inserted = 0;
+  const stmt = db.prepare("INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)");
+
+  for (const row of data) {
+    if (row.badgeId && row.timestamp) {
+      stmt.run(row.badgeId, row.timestamp, (err) => {
+        if (!err) inserted++;
+      });
+    }
+  }
+
+  stmt.finalize(() => {
+    res.json({ success: true, imported: inserted });
+  });
+});
+
+
+
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
   console.log(`Serveur lancé sur le port ${port}`);
