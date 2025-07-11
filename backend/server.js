@@ -13,7 +13,7 @@ const port = process.env.PORT || 3001;
 
 // --- Middleware global ---
 app.use(cors({
-  origin: process.env.NODE_ENV === "production" ? "https://votre-app.onrender.com" : "http://localhost:3000",
+  origin: process.env.NODE_ENV === "production" ? "https://bodyforce-frontend.onrender.com" : "http://localhost:3000",
   credentials: true,
 }));
 app.use(helmet());
