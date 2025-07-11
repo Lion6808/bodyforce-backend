@@ -474,6 +474,23 @@ app.delete("/api/cleanup", (req, res) => {
   }
 });
 
+// --- Route pour lister les fichiers dans upload/photos et upload/files ---
+app.get("/api/list-files", (req, res) => {
+  const result = {};
+  const folders = ["./upload/files", "./upload/photos"];
+
+  try {
+    folders.forEach((folder) => {
+      const files = fs.existsSync(folder) ? fs.readdirSync(folder) : [];
+      result[folder] = files;
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("Erreur lors du listing des fichiers :", err);
+    res.status(500).json({ error: "Erreur lors du listing des fichiers." });
+  }
+});
+
 
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
