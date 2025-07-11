@@ -19,7 +19,14 @@ app.use(cors({
 app.use(helmet());
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
-app.use("/upload", express.static(path.join(__dirname, "upload")));
+// Servir les fichiers avec en-tête CORS personnalisé
+app.use("/upload", (req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "https://bodyforce-frontend.onrender.com");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  next();
+}, express.static(path.join(__dirname, "upload")));
+
 
 // --- Création des dossiers upload si inexistants ---
 const ensureDir = (dir) => {
