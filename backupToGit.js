@@ -47,8 +47,12 @@ console.log("📁 Dossier upload/ copié dans", uploadTargetPath);
 console.log("➡️  Ajout des modifications dans Git...");
 execSync("git add .");
 
-console.log("✅ Commit des changements...");
-execSync(`git commit -m "Sauvegarde du ${now.toLocaleString()}"`);
+try {
+  execSync(`git commit -m "Sauvegarde du ${now.toLocaleString()}"`);
+  console.log("✅ Commit des changements...");
+} catch (error) {
+  console.log("ℹ️ Aucun changement à committer.");
+}
 
 console.log("⬆️  Push vers GitHub...");
 execSync("git push");
