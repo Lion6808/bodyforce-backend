@@ -405,6 +405,25 @@ app.get("/download/clubdb", (req, res) => {
   }
 });
 
+// Supprimer un fichier uploadé (admin uniquement)
+app.delete("/api/files", isAdmin, (req, res) => {
+  const { path: filePath } = req.body;
+  const fullPath = path.join(__dirname, filePath);
+
+  // Ne supprimer que dans le dossier "upload"
+  if (!fullPath.startsWith(path.join(__dirname, "upload"))) {
+    return res.status(400).json({ error: "Chemin invalide" });
+  }
+
+  fs.unlink(fullPath, (err) => {
+    if (err) {
+      console.error("Erreur suppression fichier :", err.message);
+      return res.status(500).json({ error: "Erreur lors de la suppression du fichier" });
+    }
+    res.json({ success: true });
+  });
+});
+
 
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
