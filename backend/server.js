@@ -395,6 +395,17 @@ app.post("/api/import-events", isAdmin, (req, res) => {
   });
 });
 
+// Route temporaire pour télécharger la base club.db
+app.get("/download/clubdb", (req, res) => {
+  const dbPath = path.join(__dirname, "club.db");
+  if (fs.existsSync(dbPath)) {
+    res.download(dbPath, "club.db");
+  } else {
+    res.status(404).json({ error: "Base club.db introuvable" });
+  }
+});
+
+
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
   console.log(`Serveur lancé sur le port ${port}`);
