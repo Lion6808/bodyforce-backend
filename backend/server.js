@@ -12,21 +12,24 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // --- Middleware global ---
-app.use(cors({
-  origin: process.env.NODE_ENV === "production" ? "https://bodyforce-frontend.onrender.com" : "http://localhost:3000",
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: process.env.NODE_ENV === "production" ? "https://bodyforce-frontend.onrender.com" : "http://localhost:3000",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  })
+);
 app.use(helmet());
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 // Servir les fichiers avec en-tête CORS personnalisé
 app.use("/upload", (req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "https://bodyforce-frontend.onrender.com");
+  res.setHeader("Access-Control-Allow-Origin", process.env.NODE_ENV === "production" ? "https://bodyforce-frontend.onrender.com" : "http://localhost:3000");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   next();
 }, express.static(path.join(__dirname, "upload")));
-
 
 // --- Création des dossiers upload si inexistants ---
 const ensureDir = (dir) => {
@@ -62,6 +65,15 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// --- Middleware isAuthenticated ---
+function isAuthenticated(req, res, next) {
+  if (!req.user) {
+    console.warn("Accès refusé. Aucun utilisateur authentifié.");
+    return res.status(401).json({ error: "Authentification requise" });
+  }
+  next();
+}
 
 // --- Middleware isAdmin ---
 function isAdmin(req, res, next) {
@@ -131,6 +143,73 @@ app.post("/upload/files", uploadFile.single("file"), (req, res) => {
   console.log("Fichier uploadé:", req.file.filename);
   res.json({ name: req.file.originalname, url: `/upload/files/${req.file.filename}` });
 });
+
+// --- Supprimer un fichier uploadé ---
+app.delete("/api/files", isAuthenticated, (req, res) => {
+  const { path: filePath } = req.body;
+  if (!filePath) {
+    console.warn("Requête DELETE /api/files sans chemin de fichier");
+    return res.status(400).json({ error: "Chemin du fichier requis" });
+  }
+
+  const fullPath = path.join(__dirname, filePath);
+  console.log(`Tentative de suppression du fichier: ${fullPath} par l'utilisateur: ${JSON.stringify(req.user)}`);
+
+  // Vérifier que le chemin est dans le dossier "upload"
+  if (!fullPath.startsWith(path.join(__dirname, "upload"))) {
+    console.warn(`Chemin invalide: ${fullPath}`);
+    return res.status(400).json({ error: "Chemin invalide" });
+  }
+
+  // Vérifier si le fichier existe
+  if (!fs.existsSync(fullPath)) {
+    console.warn(`Fichier introuvable: ${fullPath}`);
+    return res.status(404).json({ error: "Fichier introuvable" });
+  }
+
+  fs.unlink(fullPath, (err) => {
+    if (err) {
+      console.error("Erreur suppression fichier:", err.message);
+      return res.status(500).json({ error: `Erreur lors de la suppression du fichier: ${err.message}` });
+    }
+    console.log(`Fichier supprimé: ${fullPath}`);
+    res.json({ success: true, message: `Fichier ${path.basename(filePath)} supprimé` });
+  });
+});
+
+// --- Version avec AWS S3 (commentée, à activer si vous configurez S3) ---
+/*
+const AWS = require("aws-sdk");
+const s3 = new AWS.S3({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+});
+
+app.delete("/api/files", isAuthenticated, async (req, res) => {
+  const { path: filePath } = req.body;
+  if (!filePath) {
+    console.warn("Requête DELETE /api/files sans chemin de fichier");
+    return res.status(400).json({ error: "Chemin du fichier requis" });
+  }
+
+  const key = filePath.replace("/upload/files/", "");
+  console.log(`Tentative de suppression du fichier S3: ${key} par l'utilisateur: ${JSON.stringify(req.user)}`);
+
+  const params = {
+    Bucket: process.env.AWS_S3_BUCKET,
+    Key: key,
+  };
+
+  try {
+    await s3.deleteObject(params).promise();
+    console.log(`Fichier S3 supprimé: ${key}`);
+    res.json({ success: true, message: `Fichier ${path.basename(filePath)} supprimé` });
+  } catch (err) {
+    console.error("Erreur suppression fichier S3:", err.message);
+    return res.status(500).json({ error: `Erreur lors de la suppression du fichier: ${err.message}` });
+  }
+});
+*/
 
 // --- Authentification ---
 app.post("/api/login", (req, res) => {
@@ -395,7 +474,7 @@ app.post("/api/import-events", isAdmin, (req, res) => {
   });
 });
 
-// Route temporaire pour télécharger la base club.db
+// --- Route temporaire pour télécharger la base club.db ---
 app.get("/download/clubdb", (req, res) => {
   const dbPath = path.join(__dirname, "club.db");
   if (fs.existsSync(dbPath)) {
@@ -404,26 +483,6 @@ app.get("/download/clubdb", (req, res) => {
     res.status(404).json({ error: "Base club.db introuvable" });
   }
 });
-
-// Supprimer un fichier uploadé (admin uniquement)
-app.delete("/api/files", isAdmin, (req, res) => {
-  const { path: filePath } = req.body;
-  const fullPath = path.join(__dirname, filePath);
-
-  // Ne supprimer que dans le dossier "upload"
-  if (!fullPath.startsWith(path.join(__dirname, "upload"))) {
-    return res.status(400).json({ error: "Chemin invalide" });
-  }
-
-  fs.unlink(fullPath, (err) => {
-    if (err) {
-      console.error("Erreur suppression fichier :", err.message);
-      return res.status(500).json({ error: "Erreur lors de la suppression du fichier" });
-    }
-    res.json({ success: true });
-  });
-});
-
 
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
