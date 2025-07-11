@@ -1,0 +1,30 @@
+*************************************************************
+curl -X DELETE https://bodyforce-frontend.onrender.com//api/cleanup
+*************************************************************
+
+
+git add server.js
+git commit -m "FSuppression des fichiers telecharges"
+git push
+
+
+git add src/components/MemberForm.js
+git commit -m "Ajout champ Étudiant + filtres widgets"
+git push
+
+
+git add club.db
+git commit -m "Update de la base club.db depuis Render"
+git push
+
+
+git status
+git add -A
+git commit -m "Ajout de club.db mis à jour, suppression de l'ancien club"
+git push
+
+
+
+
+
+
