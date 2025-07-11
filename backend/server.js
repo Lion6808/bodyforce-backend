@@ -450,6 +450,34 @@ app.get("/download/clubdb", (req, res) => {
   }
 });
 
+const fs = require("fs");
+const path = require("path");
+
+// Route DANGEREUSE — à utiliser temporairement
+app.delete("/api/cleanup", (req, res) => {
+  const folders = ["./upload/files", "./upload/photo"];
+
+  try {
+    folders.forEach((folderPath) => {
+      if (fs.existsSync(folderPath)) {
+        const files = fs.readdirSync(folderPath);
+        files.forEach((file) => {
+          const fullPath = path.join(folderPath, file);
+          if (fs.lstatSync(fullPath).isFile()) {
+            fs.unlinkSync(fullPath);
+          }
+        });
+      }
+    });
+
+    res.json({ message: "Tous les fichiers supprimés avec succès." });
+  } catch (error) {
+    console.error("Erreur lors du nettoyage :", error);
+    res.status(500).json({ error: "Échec de la suppression des fichiers." });
+  }
+});
+
+
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
   console.log(`Serveur lancé sur le port ${port}`);
