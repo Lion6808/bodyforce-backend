@@ -452,7 +452,7 @@ app.get("/download/clubdb", (req, res) => {
 
 // Route DANGEREUSE — à utiliser temporairement
 app.delete("/api/cleanup", (req, res) => {
-  const folders = ["./upload/files", "./upload/photo"];
+  const folders = ["./upload/files", "./upload/photos"];
 
   try {
     folders.forEach((folderPath) => {
