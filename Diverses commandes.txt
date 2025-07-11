@@ -1,5 +1,7 @@
 *************************************************************
 curl -X DELETE https://BodyForce.onrender.com/api/cleanup
+
+curl https://BodyForce.onrender.com/api/list-files
 *************************************************************
 
 
