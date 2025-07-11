@@ -5,16 +5,30 @@ const sqlite3 = require("sqlite3").verbose();
 const multer = require("multer");
 const path = require("path");
 const bcrypt = require("bcrypt");
+const fs = require("fs");
+const xlsx = require("xlsx");
 
 const app = express();
 const port = process.env.PORT || 3001;
 
 // --- Middleware global ---
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === "production" ? "https://votre-app.onrender.com" : "http://localhost:3000",
+  credentials: true,
+}));
 app.use(helmet());
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use("/upload", express.static(path.join(__dirname, "upload")));
+
+// --- Création des dossiers upload si inexistants ---
+const ensureDir = (dir) => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+};
+ensureDir(path.join(__dirname, "upload/photos"));
+ensureDir(path.join(__dirname, "upload/files"));
 
 // --- Connexions aux bases de données ---
 const db = new sqlite3.Database("./club.db");
@@ -54,40 +68,79 @@ function isAdmin(req, res, next) {
 // --- Configuration Multer ---
 const photoStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "upload/photos/"),
-  filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname),
+  filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
 });
 const fileStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "upload/files/"),
-  filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname),
+  filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
 });
-const uploadPhoto = multer({ storage: photoStorage });
-const uploadFile = multer({ storage: fileStorage });
+const uploadPhoto = multer({
+  storage: photoStorage,
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png", "image/gif"];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error("Type de fichier non supporté. Seuls JPG, PNG et GIF sont autorisés."));
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+const uploadFile = multer({
+  storage: fileStorage,
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png", "image/gif", "application/pdf"];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error("Type de fichier non supporté. Seuls JPG, PNG, GIF et PDF sont autorisés."));
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+
+// --- Middleware de gestion des erreurs Multer ---
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: `Erreur Multer: ${err.message}` });
+  }
+  if (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  next();
+});
 
 // --- Routes Upload ---
-app.post("/upload/photo", uploadPhoto.single("photo"), (req, res) => {
-  if (!req.file) return res.status(400).send("Aucun fichier reçu");
-  res.json({ path: `/upload/photos/${req.file.filename}` });
+app.post("/upload/photos", uploadPhoto.single("photo"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Aucun fichier reçu" });
+  }
+  console.log("Photo uploadée:", req.file.filename);
+  res.json({ url: `/upload/photos/${req.file.filename}` });
 });
 
-app.post("/upload/file", uploadFile.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).send("Aucun fichier reçu");
+app.post("/upload/files", uploadFile.single("file"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Aucun fichier reçu" });
+  }
+  console.log("Fichier uploadé:", req.file.filename);
   res.json({ name: req.file.originalname, url: `/upload/files/${req.file.filename}` });
 });
 
 // --- Authentification ---
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password)
+  if (!username || !password) {
     return res.status(400).json({ error: "Champs requis manquants" });
+  }
 
   usersDb.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
-    if (err || !user)
+    if (err || !user) {
       return res.status(401).json({ error: "Utilisateur inconnu" });
+    }
 
     bcrypt.compare(password, user.passwordHash, (err, match) => {
-      if (err || !match)
+      if (err || !match) {
         return res.status(401).json({ error: "Mot de passe incorrect" });
-
+      }
       res.json({ id: user.id, username: user.username, role: user.role });
     });
   });
@@ -107,15 +160,21 @@ app.get("/api/users", isAdmin, (req, res) => {
 
 app.post("/api/users", isAdmin, async (req, res) => {
   const { username, password, role } = req.body;
-  if (!username || !password || !role)
+  if (!username || !password || !role) {
     return res.status(400).json({ error: "Tous les champs sont requis" });
+  }
 
   const hash = await bcrypt.hash(password, 10);
-  usersDb.run("INSERT INTO users (username, passwordHash, role) VALUES (?, ?, ?)",
-    [username, hash, role], function (err) {
-      if (err) return res.status(400).json({ error: err.message });
+  usersDb.run(
+    "INSERT INTO users (username, passwordHash, role) VALUES (?, ?, ?)",
+    [username, hash, role],
+    function (err) {
+      if (err) {
+        return res.status(400).json({ error: err.message });
+      }
       res.json({ id: this.lastID, username, role });
-    });
+    }
+  );
 });
 
 app.put("/api/users/:id", async (req, res) => {
@@ -125,17 +184,24 @@ app.put("/api/users/:id", async (req, res) => {
   const isAdminUser = req.user?.role === "admin";
 
   usersDb.get("SELECT * FROM users WHERE id = ?", [userId], async (err, user) => {
-    if (err || !user) return res.status(404).json({ error: "Utilisateur non trouvé" });
+    if (err || !user) {
+      return res.status(404).json({ error: "Utilisateur non trouvé" });
+    }
 
-    if (!isAdminUser && userId !== currentUserId)
+    if (!isAdminUser && userId !== currentUserId) {
       return res.status(403).json({ error: "Non autorisé" });
+    }
 
     const isValid = await bcrypt.compare(oldPassword, user.passwordHash);
-    if (!isValid) return res.status(401).json({ error: "Ancien mot de passe incorrect" });
+    if (!isValid) {
+      return res.status(401).json({ error: "Ancien mot de passe incorrect" });
+    }
 
     const newHash = await bcrypt.hash(newPassword, 10);
     usersDb.run("UPDATE users SET passwordHash = ? WHERE id = ?", [newHash, userId], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
       res.json({ success: true });
     });
   });
@@ -143,7 +209,9 @@ app.put("/api/users/:id", async (req, res) => {
 
 app.delete("/api/users/:id", isAdmin, (req, res) => {
   usersDb.run("DELETE FROM users WHERE id = ?", [req.params.id], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
     res.json({ success: true });
   });
 });
@@ -155,10 +223,10 @@ app.get("/api/members", (req, res) => {
       console.error("Erreur requête SQL :", err.message);
       return res.status(500).json({ error: err.message });
     }
-    const members = rows.map(row => ({
+    const members = rows.map((row) => ({
       ...row,
-      files: JSON.parse(row.files || '[]'),
-      etudiant: !!row.etudiant
+      files: JSON.parse(row.files || "[]"),
+      etudiant: !!row.etudiant,
     }));
     res.json(members);
   });
@@ -178,10 +246,21 @@ app.get("/api/presences", (req, res) => {
 // --- Route POST /api/members ---
 app.post("/api/members", (req, res) => {
   const {
-    name, firstName, birthdate, gender,
-    address, phone, mobile, email,
-    subscriptionType, startDate, endDate,
-    badgeId, files, photo, etudiant
+    name,
+    firstName,
+    birthdate,
+    gender,
+    address,
+    phone,
+    mobile,
+    email,
+    subscriptionType,
+    startDate,
+    endDate,
+    badgeId,
+    files,
+    photo,
+    etudiant,
   } = req.body;
 
   const sql = `
@@ -193,29 +272,54 @@ app.post("/api/members", (req, res) => {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-  db.run(sql, [
-    name, firstName, birthdate, gender,
-    address, phone, mobile, email,
-    subscriptionType, startDate, endDate,
-    badgeId, JSON.stringify(files || []), photo,
-    etudiant ? 1 : 0
-  ], function (err) {
-    if (err) {
-      console.error("Erreur INSERT membre :", err.message);
-      return res.status(500).json({ error: "Erreur lors de la création du membre." });
+  db.run(
+    sql,
+    [
+      name,
+      firstName,
+      birthdate,
+      gender,
+      address,
+      phone,
+      mobile,
+      email,
+      subscriptionType,
+      startDate,
+      endDate,
+      badgeId,
+      JSON.stringify(files || []),
+      photo,
+      etudiant ? 1 : 0,
+    ],
+    function (err) {
+      if (err) {
+        console.error("Erreur INSERT membre :", err.message);
+        return res.status(500).json({ error: "Erreur lors de la création du membre." });
+      }
+      res.json({ id: this.lastID });
     }
-    res.json({ id: this.lastID });
-  });
+  );
 });
 
 // --- Route PUT /api/members/:id ---
 app.put("/api/members/:id", (req, res) => {
   const id = req.params.id;
   const {
-    name, firstName, birthdate, gender,
-    address, phone, mobile, email,
-    subscriptionType, startDate, endDate,
-    badgeId, files, photo, etudiant
+    name,
+    firstName,
+    birthdate,
+    gender,
+    address,
+    phone,
+    mobile,
+    email,
+    subscriptionType,
+    startDate,
+    endDate,
+    badgeId,
+    files,
+    photo,
+    etudiant,
   } = req.body;
 
   const sql = `
@@ -227,27 +331,37 @@ app.put("/api/members/:id", (req, res) => {
     WHERE id = ?
   `;
 
-  db.run(sql, [
-    name, firstName, birthdate, gender,
-    address, phone, mobile, email,
-    subscriptionType, startDate, endDate,
-    badgeId, JSON.stringify(files || []), photo,
-    etudiant ? 1 : 0,
-    id
-  ], function (err) {
-    if (err) {
-      console.error("Erreur UPDATE membre :", err.message);
-      return res.status(500).json({ error: "Erreur lors de la mise à jour du membre." });
+  db.run(
+    sql,
+    [
+      name,
+      firstName,
+      birthdate,
+      gender,
+      address,
+      phone,
+      mobile,
+      email,
+      subscriptionType,
+      startDate,
+      endDate,
+      badgeId,
+      JSON.stringify(files || []),
+      photo,
+      etudiant ? 1 : 0,
+      id,
+    ],
+    function (err) {
+      if (err) {
+        console.error("Erreur UPDATE membre :", err.message);
+        return res.status(500).json({ error: "Erreur lors de la mise à jour du membre." });
+      }
+      res.json({ success: true });
     }
-    res.json({ success: true });
-  });
+  );
 });
 
-
-// --- Route POST /api/import-events (ajoutée uniquement cette partie) ---
-const fs = require("fs");
-const xlsx = require("xlsx");
-
+// --- Route POST /api/import-events ---
 app.post("/api/import-events", isAdmin, (req, res) => {
   const excelPath = path.join(__dirname, "upload", "presences.xlsx");
   if (!fs.existsSync(excelPath)) {
@@ -273,8 +387,6 @@ app.post("/api/import-events", isAdmin, (req, res) => {
     res.json({ success: true, imported: inserted });
   });
 });
-
-
 
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
