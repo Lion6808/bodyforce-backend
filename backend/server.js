@@ -450,9 +450,6 @@ app.get("/download/clubdb", (req, res) => {
   }
 });
 
-const fs = require("fs");
-const path = require("path");
-
 // Route DANGEREUSE — à utiliser temporairement
 app.delete("/api/cleanup", (req, res) => {
   const folders = ["./upload/files", "./upload/photo"];
