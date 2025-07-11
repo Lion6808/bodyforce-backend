@@ -153,7 +153,7 @@ app.delete("/api/files", isAuthenticated, (req, res) => {
   }
 
   const fullPath = path.join(__dirname, filePath);
-  console.log(`Tentative de suppression du fichier: ${fullPath} par l'utilisateur: ${JSON.stringify(req.user)}`);
+  console.log(`Requête DELETE reçue - Chemin: ${filePath}, Chemin complet: ${fullPath}, Utilisateur: ${JSON.stringify(req.user)}`);
 
   // Vérifier que le chemin est dans le dossier "upload"
   if (!fullPath.startsWith(path.join(__dirname, "upload"))) {
@@ -176,40 +176,6 @@ app.delete("/api/files", isAuthenticated, (req, res) => {
     res.json({ success: true, message: `Fichier ${path.basename(filePath)} supprimé` });
   });
 });
-
-// --- Version avec AWS S3 (commentée, à activer si vous configurez S3) ---
-/*
-const AWS = require("aws-sdk");
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-});
-
-app.delete("/api/files", isAuthenticated, async (req, res) => {
-  const { path: filePath } = req.body;
-  if (!filePath) {
-    console.warn("Requête DELETE /api/files sans chemin de fichier");
-    return res.status(400).json({ error: "Chemin du fichier requis" });
-  }
-
-  const key = filePath.replace("/upload/files/", "");
-  console.log(`Tentative de suppression du fichier S3: ${key} par l'utilisateur: ${JSON.stringify(req.user)}`);
-
-  const params = {
-    Bucket: process.env.AWS_S3_BUCKET,
-    Key: key,
-  };
-
-  try {
-    await s3.deleteObject(params).promise();
-    console.log(`Fichier S3 supprimé: ${key}`);
-    res.json({ success: true, message: `Fichier ${path.basename(filePath)} supprimé` });
-  } catch (err) {
-    console.error("Erreur suppression fichier S3:", err.message);
-    return res.status(500).json({ error: `Erreur lors de la suppression du fichier: ${err.message}` });
-  }
-});
-*/
 
 // --- Authentification ---
 app.post("/api/login", (req, res) => {
