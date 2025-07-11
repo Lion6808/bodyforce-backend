@@ -1,5 +1,5 @@
 *************************************************************
-curl -X DELETE https://bodyforce-frontend.onrender.com//api/cleanup
+curl -X DELETE https://BodyForce.onrender.com/api/cleanup
 *************************************************************
 
 
