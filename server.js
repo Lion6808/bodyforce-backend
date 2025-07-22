@@ -14,7 +14,10 @@ const port = process.env.PORT || 3001;
 // --- Middleware global ---
 app.use(
   cors({
-    origin: process.env.NODE_ENV === "production" ? "https://bodyforce-frontend.onrender.com" : "http://localhost:3000",
+    origin:
+      process.env.NODE_ENV === "production"
+        ? "https://bodyforce-frontend.onrender.com"
+        : "http://localhost:3000",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -24,12 +27,24 @@ app.use(helmet());
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 // Servir les fichiers avec en-tête CORS personnalisé
-app.use("/upload", (req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", process.env.NODE_ENV === "production" ? "https://bodyforce-frontend.onrender.com" : "http://localhost:3000");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  next();
-}, express.static(path.join(__dirname, "upload")));
+app.use(
+  "/upload",
+  (req, res, next) => {
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      process.env.NODE_ENV === "production"
+        ? "https://bodyforce-frontend.onrender.com"
+        : "http://localhost:3000"
+    );
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+    next();
+  },
+  express.static(path.join(__dirname, "upload"))
+);
 
 // --- Création des dossiers upload si inexistants ---
 const ensureDir = (dir) => {
@@ -98,7 +113,11 @@ const uploadPhoto = multer({
   fileFilter: (req, file, cb) => {
     const allowedTypes = ["image/jpeg", "image/png", "image/gif"];
     if (!allowedTypes.includes(file.mimetype)) {
-      return cb(new Error("Type de fichier non supporté. Seuls JPG, PNG et GIF sont autorisés."));
+      return cb(
+        new Error(
+          "Type de fichier non supporté. Seuls JPG, PNG et GIF sont autorisés."
+        )
+      );
     }
     cb(null, true);
   },
@@ -107,9 +126,18 @@ const uploadPhoto = multer({
 const uploadFile = multer({
   storage: fileStorage,
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ["image/jpeg", "image/png", "image/gif", "application/pdf"];
+    const allowedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "application/pdf",
+    ];
     if (!allowedTypes.includes(file.mimetype)) {
-      return cb(new Error("Type de fichier non supporté. Seuls JPG, PNG, GIF et PDF sont autorisés."));
+      return cb(
+        new Error(
+          "Type de fichier non supporté. Seuls JPG, PNG, GIF et PDF sont autorisés."
+        )
+      );
     }
     cb(null, true);
   },
@@ -141,7 +169,10 @@ app.post("/upload/files", uploadFile.single("file"), (req, res) => {
     return res.status(400).json({ error: "Aucun fichier reçu" });
   }
   console.log("Fichier uploadé:", req.file.filename);
-  res.json({ name: req.file.originalname, url: `/upload/files/${req.file.filename}` });
+  res.json({
+    name: req.file.originalname,
+    url: `/upload/files/${req.file.filename}`,
+  });
 });
 
 // --- Supprimer un fichier uploadé ---
@@ -153,7 +184,11 @@ app.delete("/api/files", isAuthenticated, (req, res) => {
   }
 
   const fullPath = path.join(__dirname, filePath);
-  console.log(`Requête DELETE reçue - Chemin: ${filePath}, Chemin complet: ${fullPath}, Utilisateur: ${JSON.stringify(req.user)}`);
+  console.log(
+    `Requête DELETE reçue - Chemin: ${filePath}, Chemin complet: ${fullPath}, Utilisateur: ${JSON.stringify(
+      req.user
+    )}`
+  );
 
   // Vérifier que le chemin est dans le dossier "upload"
   if (!fullPath.startsWith(path.join(__dirname, "upload"))) {
@@ -170,10 +205,17 @@ app.delete("/api/files", isAuthenticated, (req, res) => {
   fs.unlink(fullPath, (err) => {
     if (err) {
       console.error("Erreur suppression fichier:", err.message);
-      return res.status(500).json({ error: `Erreur lors de la suppression du fichier: ${err.message}` });
+      return res
+        .status(500)
+        .json({
+          error: `Erreur lors de la suppression du fichier: ${err.message}`,
+        });
     }
     console.log(`Fichier supprimé: ${fullPath}`);
-    res.json({ success: true, message: `Fichier ${path.basename(filePath)} supprimé` });
+    res.json({
+      success: true,
+      message: `Fichier ${path.basename(filePath)} supprimé`,
+    });
   });
 });
 
@@ -184,18 +226,22 @@ app.post("/api/login", (req, res) => {
     return res.status(400).json({ error: "Champs requis manquants" });
   }
 
-  usersDb.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
-    if (err || !user) {
-      return res.status(401).json({ error: "Utilisateur inconnu" });
-    }
-
-    bcrypt.compare(password, user.passwordHash, (err, match) => {
-      if (err || !match) {
-        return res.status(401).json({ error: "Mot de passe incorrect" });
+  usersDb.get(
+    "SELECT * FROM users WHERE username = ?",
+    [username],
+    (err, user) => {
+      if (err || !user) {
+        return res.status(401).json({ error: "Utilisateur inconnu" });
       }
-      res.json({ id: user.id, username: user.username, role: user.role });
-    });
-  });
+
+      bcrypt.compare(password, user.passwordHash, (err, match) => {
+        if (err || !match) {
+          return res.status(401).json({ error: "Mot de passe incorrect" });
+        }
+        res.json({ id: user.id, username: user.username, role: user.role });
+      });
+    }
+  );
 });
 
 // --- Gestion des utilisateurs ---
@@ -235,37 +281,49 @@ app.put("/api/users/:id", async (req, res) => {
   const currentUserId = parseInt(req.user?.id);
   const isAdminUser = req.user?.role === "admin";
 
-  usersDb.get("SELECT * FROM users WHERE id = ?", [userId], async (err, user) => {
-    if (err || !user) {
-      return res.status(404).json({ error: "Utilisateur non trouvé" });
-    }
+  usersDb.get(
+    "SELECT * FROM users WHERE id = ?",
+    [userId],
+    async (err, user) => {
+      if (err || !user) {
+        return res.status(404).json({ error: "Utilisateur non trouvé" });
+      }
 
-    if (!isAdminUser && userId !== currentUserId) {
-      return res.status(403).json({ error: "Non autorisé" });
-    }
+      if (!isAdminUser && userId !== currentUserId) {
+        return res.status(403).json({ error: "Non autorisé" });
+      }
 
-    const isValid = await bcrypt.compare(oldPassword, user.passwordHash);
-    if (!isValid) {
-      return res.status(401).json({ error: "Ancien mot de passe incorrect" });
-    }
+      const isValid = await bcrypt.compare(oldPassword, user.passwordHash);
+      if (!isValid) {
+        return res.status(401).json({ error: "Ancien mot de passe incorrect" });
+      }
 
-    const newHash = await bcrypt.hash(newPassword, 10);
-    usersDb.run("UPDATE users SET passwordHash = ? WHERE id = ?", [newHash, userId], (err) => {
+      const newHash = await bcrypt.hash(newPassword, 10);
+      usersDb.run(
+        "UPDATE users SET passwordHash = ? WHERE id = ?",
+        [newHash, userId],
+        (err) => {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          res.json({ success: true });
+        }
+      );
+    }
+  );
+});
+
+app.delete("/api/users/:id", isAdmin, (req, res) => {
+  usersDb.run(
+    "DELETE FROM users WHERE id = ?",
+    [req.params.id],
+    function (err) {
       if (err) {
         return res.status(500).json({ error: err.message });
       }
       res.json({ success: true });
-    });
-  });
-});
-
-app.delete("/api/users/:id", isAdmin, (req, res) => {
-  usersDb.run("DELETE FROM users WHERE id = ?", [req.params.id], function (err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
     }
-    res.json({ success: true });
-  });
+  );
 });
 
 // --- Route GET /api/members ---
@@ -288,7 +346,10 @@ app.get("/api/members", (req, res) => {
 app.get("/api/presences", (req, res) => {
   db.all("SELECT * FROM presences", (err, rows) => {
     if (err) {
-      console.error("Erreur lors de la récupération des présences :", err.message);
+      console.error(
+        "Erreur lors de la récupération des présences :",
+        err.message
+      );
       return res.status(500).json({ error: err.message });
     }
     res.json(rows);
@@ -346,7 +407,9 @@ app.post("/api/members", (req, res) => {
     function (err) {
       if (err) {
         console.error("Erreur INSERT membre :", err.message);
-        return res.status(500).json({ error: "Erreur lors de la création du membre." });
+        return res
+          .status(500)
+          .json({ error: "Erreur lors de la création du membre." });
       }
       res.json({ id: this.lastID });
     }
@@ -406,7 +469,9 @@ app.put("/api/members/:id", (req, res) => {
     function (err) {
       if (err) {
         console.error("Erreur UPDATE membre :", err.message);
-        return res.status(500).json({ error: "Erreur lors de la mise à jour du membre." });
+        return res
+          .status(500)
+          .json({ error: "Erreur lors de la mise à jour du membre." });
       }
       res.json({ success: true });
     }
@@ -417,7 +482,9 @@ app.put("/api/members/:id", (req, res) => {
 app.post("/api/import-events", isAdmin, (req, res) => {
   const excelPath = path.join(__dirname, "upload", "presences.xlsx");
   if (!fs.existsSync(excelPath)) {
-    return res.status(404).json({ error: "Fichier Excel non trouvé (upload/presences.xlsx)" });
+    return res
+      .status(404)
+      .json({ error: "Fichier Excel non trouvé (upload/presences.xlsx)" });
   }
 
   const workbook = xlsx.readFile(excelPath);
@@ -425,7 +492,9 @@ app.post("/api/import-events", isAdmin, (req, res) => {
   const data = xlsx.utils.sheet_to_json(sheet);
 
   let inserted = 0;
-  const stmt = db.prepare("INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)");
+  const stmt = db.prepare(
+    "INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)"
+  );
 
   for (const row of data) {
     if (row.badgeId && row.timestamp) {
@@ -490,7 +559,6 @@ app.get("/api/list-files", (req, res) => {
     res.status(500).json({ error: "Erreur lors du listing des fichiers." });
   }
 });
-
 
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
