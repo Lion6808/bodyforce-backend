@@ -1,9 +1,8 @@
 // src/supabaseClient.js - Adapté à votre structure existante
 import { createClient } from '@supabase/supabase-js';
 
-// Variables d'environnement
 const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://hpgcqrsxttflutdsasar.supabase.co';
-const supabaseKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwZ2NxcnN4dHRmbHV0ZHNhc2FyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI0MjEzMTYsImV4cCI6MjA2Nzk5NzMxNn0.7gecaEShO4oUStTcL9Xi-sJni9Pkb4d3mV5OVWxxiyM';
+const supabaseKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
 
 export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
@@ -13,24 +12,20 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   }
 });
 
-// Services adaptés à votre structure de base de données
 export const supabaseServices = {
-  // === MEMBRES ===
   async getMembers() {
     const { data, error } = await supabase
       .from('members')
       .select('*')
       .order('name', { ascending: true });
-    
+
     if (error) {
       console.error('Erreur getMembers:', error);
       throw error;
     }
-    
-    // Transformer les données pour compatibilité avec le frontend
+
     return (data || []).map(member => ({
       ...member,
-      // Assurer la compatibilité avec les fichiers JSON
       files: member.files || [],
       etudiant: !!member.etudiant
     }));
@@ -42,15 +37,13 @@ export const supabaseServices = {
       .select('*')
       .eq('id', id)
       .single();
-    
+
     if (error) {
-      if (error.code === 'PGRST116') {
-        return null; // Pas trouvé
-      }
+      if (error.code === 'PGRST116') return null;
       console.error('Erreur getMemberById:', error);
       throw error;
     }
-    
+
     return {
       ...data,
       files: data.files || [],
@@ -64,15 +57,13 @@ export const supabaseServices = {
       .select('*')
       .eq('badgeId', badgeId)
       .single();
-    
+
     if (error) {
-      if (error.code === 'PGRST116') {
-        return null; // Pas trouvé
-      }
+      if (error.code === 'PGRST116') return null;
       console.error('Erreur getMemberByBadgeId:', error);
       throw error;
     }
-    
+
     return {
       ...data,
       files: data.files || [],
@@ -86,12 +77,12 @@ export const supabaseServices = {
       .insert([memberData])
       .select()
       .single();
-    
+
     if (error) {
       console.error('Erreur createMember:', error);
       throw error;
     }
-    
+
     return data;
   },
 
@@ -102,70 +93,55 @@ export const supabaseServices = {
       .eq('id', id)
       .select()
       .single();
-    
+
     if (error) {
       console.error('Erreur updateMember:', error);
       throw error;
     }
-    
+
     return data;
   },
 
   async deleteMember(id) {
-    // Supprimer d'abord les paiements liés (cascade devrait le faire automatiquement)
     const { error } = await supabase
       .from('members')
       .delete()
       .eq('id', id);
-    
+
     if (error) {
       console.error('Erreur deleteMember:', error);
       throw error;
     }
   },
 
-  // === PRÉSENCES ===
   async getPresences(startDate = null, endDate = null, badgeId = null) {
     let query = supabase
       .from('presences')
       .select('*')
       .order('timestamp', { ascending: false });
 
-    // Filtres de dates
-    if (startDate) {
-      query = query.gte('timestamp', startDate.toISOString());
-    }
-    if (endDate) {
-      query = query.lte('timestamp', endDate.toISOString());
-    }
-    if (badgeId) {
-      query = query.eq('badgeId', badgeId);
-    }
+    if (startDate) query = query.gte('timestamp', startDate.toISOString());
+    if (endDate) query = query.lte('timestamp', endDate.toISOString());
+    if (badgeId) query = query.eq('badgeId', badgeId);
 
     const { data, error } = await query;
-    
+
     if (error) {
       console.error('Erreur getPresences:', error);
       throw error;
     }
-    
+
     return data || [];
   },
 
   async getPresencesWithMembers(startDate = null, endDate = null) {
-    // Récupérer les présences
     const presences = await this.getPresences(startDate, endDate);
-    
-    // Récupérer tous les membres pour faire le mapping
     const members = await this.getMembers();
     const membersMap = {};
     members.forEach(m => {
-      if (m.badgeId) {
-        membersMap[m.badgeId] = m;
-      }
+      if (m.badgeId) membersMap[m.badgeId] = m;
     });
-    
-    // Enrichir les présences avec les données membres
+
     return presences.map(presence => ({
       ...presence,
       member: membersMap[presence.badgeId] || null
@@ -175,15 +151,11 @@ export const supabaseServices = {
   async createPresence(badgeId, timestamp = new Date()) {
     const { data, error } = await supabase
       .from('presences')
-      .insert([{
-        badgeId,
-        timestamp: timestamp.toISOString()
-      }])
+      .insert([{ badgeId, timestamp: timestamp.toISOString() }])
       .select()
       .single();
 
     if (error) {
-      // Gerer le cas de doublons (contrainte unique)
       if (error.code === '23505') {
         console.warn('Présence déjà enregistrée:', badgeId, timestamp);
         return null;
@@ -191,7 +163,7 @@ export const supabaseServices = {
       console.error('Erreur createPresence:', error);
       throw error;
     }
-    
+
     return data;
   },
 
@@ -200,7 +172,7 @@ export const supabaseServices = {
       .from('presences')
       .delete()
       .eq('id', id);
-    
+
     if (error) {
       console.error('Erreur deletePresence:', error);
       throw error;
@@ -212,34 +184,28 @@ export const supabaseServices = {
       .from('presences')
       .delete()
       .eq('badgeId', badgeId);
-    
+
     if (error) {
       console.error('Erreur deletePresencesByBadgeId:', error);
       throw error;
     }
   },
 
-  // === PAIEMENTS ===
   async getPayments(memberId = null) {
     let query = supabase
       .from('payments')
-      .select(`
-        *,
-        member:members(id, name, firstName, badgeId)
-      `)
+      .select(`*, member:members(id, name, firstName, badgeId)`)
       .order('date_paiement', { ascending: false });
 
-    if (memberId) {
-      query = query.eq('member_id', memberId);
-    }
+    if (memberId) query = query.eq('member_id', memberId);
 
     const { data, error } = await query;
-    
+
     if (error) {
       console.error('Erreur getPayments:', error);
       throw error;
     }
-    
+
     return data || [];
   },
 
@@ -247,17 +213,14 @@ export const supabaseServices = {
     const { data, error } = await supabase
       .from('payments')
       .insert([paymentData])
-      .select(`
-        *,
-        member:members(id, name, firstName, badgeId)
-      `)
+      .select(`*, member:members(id, name, firstName, badgeId)`)
       .single();
 
     if (error) {
       console.error('Erreur createPayment:', error);
       throw error;
     }
-    
+
     return data;
   },
 
@@ -266,17 +229,14 @@ export const supabaseServices = {
       .from('payments')
       .update(paymentData)
       .eq('id', id)
-      .select(`
-        *,
-        member:members(id, name, firstName, badgeId)
-      `)
+      .select(`*, member:members(id, name, firstName, badgeId)`)
       .single();
 
     if (error) {
       console.error('Erreur updatePayment:', error);
       throw error;
     }
-    
+
     return data;
   },
 
@@ -285,7 +245,7 @@ export const supabaseServices = {
       .from('payments')
       .delete()
       .eq('id', id);
-    
+
     if (error) {
       console.error('Erreur deletePayment:', error);
       throw error;
@@ -296,21 +256,16 @@ export const supabaseServices = {
     return this.updatePayment(id, { is_paid: isPaid });
   },
 
-  // === STORAGE (pour fichiers et photos) ===
   async uploadFile(bucket, path, file) {
     const { data, error } = await supabase.storage
       .from(bucket)
-      .upload(path, file, {
-        cacheControl: '3600',
-        upsert: false
-      });
+      .upload(path, file, { cacheControl: '3600', upsert: false });
 
     if (error) {
       console.error('Erreur uploadFile:', error);
       throw error;
     }
-    
-    // Retourner l'URL publique
+
     const { data: urlData } = supabase.storage
       .from(bucket)
       .getPublicUrl(data.path);
@@ -336,29 +291,38 @@ export const supabaseServices = {
     const { data } = supabase.storage
       .from(bucket)
       .getPublicUrl(path);
-    
+
     return data.publicUrl;
   },
 
-  // === STATISTIQUES ===
   async getStatistics() {
     try {
-      // Récupérer toutes les données en parallèle
-      const [membersResult, presencesResult, paymentsResult] = await Promise.all([
-        supabase.from('members').select('*'),
-        supabase.from('presences').select('*'),
-        supabase.from('payments').select('*')
+      // Pagination Supabase (par 1000)
+      const pageSize = 1000;
+      const fetchAll = async (table) => {
+        let allData = [];
+        let from = 0;
+        let to = pageSize - 1;
+        while (true) {
+          const { data, error, count } = await supabase
+            .from(table)
+            .select('*', { count: 'exact' })
+            .range(from, to);
+          if (error) throw error;
+          allData = [...allData, ...data];
+          if (data.length < pageSize) break;
+          from += pageSize;
+          to += pageSize;
+        }
+        return allData;
+      };
+
+      const [members, presences, payments] = await Promise.all([
+        fetchAll('members'),
+        fetchAll('presences'),
+        fetchAll('payments')
       ]);
 
-      if (membersResult.error) throw membersResult.error;
-      if (presencesResult.error) throw presencesResult.error;
-      if (paymentsResult.error) throw paymentsResult.error;
-
-      const members = membersResult.data || [];
-      const presences = presencesResult.data || [];
-      const payments = paymentsResult.data || [];
-
-      // Calculer les statistiques
       const today = new Date();
       const stats = {
         total: members.length,
@@ -371,13 +335,11 @@ export const supabaseServices = {
       };
 
       members.forEach(member => {
-        // Statut d'abonnement (dates stockées en text)
         if (member.endDate) {
           try {
             const endDate = new Date(member.endDate);
-            if (endDate > today) {
-              stats.actifs++;
-            } else {
+            if (endDate > today) stats.actifs++;
+            else {
               stats.expirés++;
               stats.membresExpirés.push({
                 id: member.id,
@@ -387,29 +349,24 @@ export const supabaseServices = {
               });
             }
           } catch (e) {
-            // Date invalide, considérer comme expiré
             stats.expirés++;
           }
         } else {
           stats.expirés++;
         }
 
-        // Genre
         if (member.gender === 'Homme') stats.hommes++;
         else if (member.gender === 'Femme') stats.femmes++;
-
-        // Étudiants
         if (member.etudiant) stats.etudiants++;
       });
 
-      return { 
-        stats, 
-        members, 
-        presences, 
+      return {
+        stats,
+        members,
+        presences,
         payments,
-        // Statistiques supplémentaires
         totalPresences: presences.length,
-        totalPayments: payments.reduce((sum, p) => sum + parseFloat(p.amount), 0),
+        totalPayments: payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0),
         unpaidPayments: payments.filter(p => !p.is_paid).length
       };
     } catch (error) {
@@ -418,16 +375,15 @@ export const supabaseServices = {
     }
   },
 
-  // === UTILITAIRES ===
   async testConnection() {
     try {
       const { data, error } = await supabase
         .from('members')
         .select('count(*)')
         .single();
-      
+
       if (error) throw error;
-      
+
       console.log('✅ Connexion Supabase OK - Membres:', data.count);
       return true;
     } catch (error) {
@@ -436,10 +392,8 @@ export const supabaseServices = {
     }
   },
 
-  // Fonction pour nettoyer les présences en double (utilitaire)
   async cleanDuplicatePresences() {
     try {
-      // Cette fonction peut être appelée pour nettoyer les doublons
       const { data, error } = await supabase.rpc('clean_duplicate_presences');
       if (error) throw error;
       return data;
