@@ -131,38 +131,69 @@ export const supabaseServices = {
   },
 
   async getPresences(startDate = null, endDate = null, badgeId = null) {
-    let query = supabase
-      .from("presences")
-      .select("*")
-      .order("timestamp", { ascending: false });
+    // CORRECTION: Récupérer TOUTES les présences avec pagination
+    const pageSize = 1000;
+    let allPresences = [];
+    let from = 0;
+    let hasMore = true;
 
-    // CORRECTION: Conversion des dates pour les filtres
-    if (startDate) {
-      const startTimestamp = createLocalTimestamp(startDate);
-      query = query.gte("timestamp", startTimestamp);
-      console.log(
-        `🔍 Filtre début: ${startDate.toLocaleString()} -> ${startTimestamp}`
-      );
+    while (hasMore) {
+      let query = supabase
+        .from("presences")
+        .select("*", { count: "exact" })
+        .order("timestamp", { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      // Appliquer les filtres seulement si spécifiés (pour éviter de perdre des données)
+      if (startDate) {
+        const startTimestamp = createLocalTimestamp(startDate);
+        query = query.gte("timestamp", startTimestamp);
+        console.log(
+          `🔍 Filtre début: ${startDate.toLocaleString()} -> ${startTimestamp}`
+        );
+      }
+
+      if (endDate) {
+        const endTimestamp = createLocalTimestamp(endDate);
+        query = query.lte("timestamp", endTimestamp);
+        console.log(
+          `🔍 Filtre fin: ${endDate.toLocaleString()} -> ${endTimestamp}`
+        );
+      }
+
+      if (badgeId) query = query.eq("badgeId", badgeId);
+
+      const { data, error, count } = await query;
+
+      if (error) {
+        console.error("Erreur getPresences:", error);
+        throw error;
+      }
+
+      if (data && data.length > 0) {
+        allPresences = [...allPresences, ...data];
+        console.log(
+          `📊 Récupéré ${data.length} présences (${from + 1}-${
+            from + data.length
+          }), total: ${allPresences.length}`
+        );
+      }
+
+      // Vérifier s'il y a encore des données
+      hasMore = data && data.length === pageSize;
+      from += pageSize;
+
+      // Sécurité : éviter les boucles infinies
+      if (from > 50000) {
+        console.warn(
+          "⚠️ Limitation de sécurité atteinte (50k enregistrements)"
+        );
+        break;
+      }
     }
 
-    if (endDate) {
-      const endTimestamp = createLocalTimestamp(endDate);
-      query = query.lte("timestamp", endTimestamp);
-      console.log(
-        `🔍 Filtre fin: ${endDate.toLocaleString()} -> ${endTimestamp}`
-      );
-    }
-
-    if (badgeId) query = query.eq("badgeId", badgeId);
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error("Erreur getPresences:", error);
-      throw error;
-    }
-
-    return data || [];
+    console.log(`✅ Total final: ${allPresences.length} présences récupérées`);
+    return allPresences;
   },
 
   async getPresencesWithMembers(startDate = null, endDate = null) {
