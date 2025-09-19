@@ -1,518 +1,344 @@
-// src/supabaseClient.js - Adapté à votre structure existante avec corrections de timestamps
+// 📄 src/supabaseClient.js — BodyForce
+// ------------------------------------------------------------
+// ✅ Ce fichier centralise :
+// - la création du client Supabase
+// - des helpers d’upload "egress-friendly" (cacheControl long, upsert)
+// - un cache mémoire pour les publicUrl (évite de régénérer à chaque rendu)
+// - un ensemble de services organisés (members, presences, messages, payments, files, stats)
+// ------------------------------------------------------------
+
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl =
-  process.env.REACT_APP_SUPABASE_URL ||
-  "https://hpgcqrsxttflutdsasar.supabase.co";
-const supabaseKey =
-  process.env.REACT_APP_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
+/* ------------------------------------------------------------------
+   1) Client Supabase (env)
+------------------------------------------------------------------- */
+export const supabase = createClient(
+  process.env.REACT_APP_SUPABASE_URL,
+  process.env.REACT_APP_SUPABASE_KEY
+);
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true,
-  },
-});
+/* ------------------------------------------------------------------
+   2) Helpers egress-friendly
+      - Cache mémoire des publicUrl
+      - Uploads avec cacheControl=1 an
+      - Conventions buckets: "photo" (avatars), "documents" (certificats)
+------------------------------------------------------------------- */
 
-// Fonction utilitaire pour créer un timestamp local correct
-const createLocalTimestamp = (date = new Date()) => {
-  // Créer un timestamp qui représente la date/heure locale
-  // mais sans conversion de timezone automatique
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  const seconds = String(date.getSeconds()).padStart(2, "0");
+// Mémo simple des URLs publiques pour éviter de les recalculer/régénérer à chaque rendu.
+const publicUrlCache = new Map(); // key: `${bucket}/${path}` -> url string
 
-  // Format: YYYY-MM-DDTHH:mm:ss+00:00 (mais représentant l'heure locale)
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}+00:00`;
+/**
+ * getPublicUrlCached(bucket, path)
+ * Retourne l'URL publique Supabase Storage avec un petit cache mémoire.
+ */
+export const getPublicUrlCached = (bucket, path) => {
+  if (!bucket || !path) return "";
+  const key = `${bucket}/${path}`;
+  const cached = publicUrlCache.get(key);
+  if (cached) return cached;
+
+  const { data, error } = supabase.storage.from(bucket).getPublicUrl(path);
+  if (error) {
+    // On reste silencieux (on renvoie chaîne vide) pour ne pas casser l'UI
+    return "";
+  }
+  const url = data?.publicUrl || "";
+  if (url) publicUrlCache.set(key, url);
+  return url;
 };
 
-export const supabaseServices = {
-  async getMembers() {
-    const { data, error } = await supabase
-      .from("members")
-      .select("*")
-      .order("name", { ascending: true });
+/**
+ * uploadWithCacheControl(bucket, path, fileOrBlob, opts?)
+ * Upload générique avec upsert et cache long (1 an) par défaut.
+ */
+export const uploadWithCacheControl = async (bucket, path, fileOrBlob, opts = {}) => {
+  const options = {
+    upsert: true,
+    cacheControl: "31536000", // 1 an
+    ...opts,
+  };
+  const { data, error } = await supabase.storage.from(bucket).upload(path, fileOrBlob, options);
+  if (error) throw error;
 
-    if (error) {
-      console.error("Erreur getMembers:", error);
-      throw error;
-    }
+  // Invalide l'URL mémorisée si on réécrit le même objet
+  publicUrlCache.delete(`${bucket}/${path}`);
+  return data;
+};
 
-    return (data || []).map((member) => ({
-      ...member,
-      files: member.files || [],
-      etudiant: !!member.etudiant,
-    }));
-  },
+// Conventions projet
+export const uploadPhoto = (path, file, opts) =>
+  uploadWithCacheControl("photo", path, file, opts);
+export const uploadDocument = (path, file, opts) =>
+  uploadWithCacheControl("documents", path, file, opts);
 
-  async getMemberById(id) {
-    const { data, error } = await supabase
-      .from("members")
-      .select("*")
-      .eq("id", id)
-      .single();
+// Raccourcis d’URL publiques
+export const getPhotoUrl = (path) => getPublicUrlCached("photo", path);
+export const getDocumentUrl = (path) => getPublicUrlCached("documents", path);
 
-    if (error) {
-      if (error.code === "PGRST116") return null;
-      console.error("Erreur getMemberById:", error);
-      throw error;
-    }
+/* ------------------------------------------------------------------
+   3) Utilitaires communs (pagination, sécurité)
+------------------------------------------------------------------- */
 
-    return {
-      ...data,
-      files: data.files || [],
-      etudiant: !!data.etudiant,
-    };
-  },
+/**
+ * paginate(query, { page = 0, limit = 50 })
+ * Applique .range() à une requête Supabase.
+ */
+const paginate = (query, { page = 0, limit = 50 } = {}) => {
+  const from = page * limit;
+  const to = from + limit - 1;
+  return query.range(from, to);
+};
 
-  async getMemberByBadgeId(badgeId) {
-    const { data, error } = await supabase
-      .from("members")
-      .select("*")
-      .eq("badgeId", badgeId)
-      .single();
+/* ------------------------------------------------------------------
+   4) Services : MEMBERS
+      Table: "members" (id, firstName, lastName, sex, student, photo, ... )
+------------------------------------------------------------------- */
 
-    if (error) {
-      if (error.code === "PGRST116") return null;
-      console.error("Erreur getMemberByBadgeId:", error);
-      throw error;
-    }
-
-    return {
-      ...data,
-      files: data.files || [],
-      etudiant: !!data.etudiant,
-    };
-  },
-
-  async createMember(memberData) {
-    const { data, error } = await supabase
-      .from("members")
-      .insert([memberData])
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Erreur createMember:", error);
-      throw error;
-    }
-
-    return data;
-  },
-
-  async updateMember(id, memberData) {
-    const { data, error } = await supabase
-      .from("members")
-      .update(memberData)
-      .eq("id", id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Erreur updateMember:", error);
-      throw error;
-    }
-
-    return data;
-  },
-
-  async deleteMember(id) {
-    const { error } = await supabase.from("members").delete().eq("id", id);
-
-    if (error) {
-      console.error("Erreur deleteMember:", error);
-      throw error;
-    }
-  },
-
-  async getPresences(startDate = null, endDate = null, badgeId = null) {
-    // CORRECTION: Récupérer TOUTES les présences avec pagination
-    const pageSize = 1000;
-    let allPresences = [];
-    let from = 0;
-    let hasMore = true;
-
-    while (hasMore) {
-      let query = supabase
-        .from("presences")
-        .select("*", { count: "exact" })
-        .order("timestamp", { ascending: false })
-        .range(from, from + pageSize - 1);
-
-      // Appliquer les filtres seulement si spécifiés (pour éviter de perdre des données)
-      if (startDate) {
-        const startTimestamp = createLocalTimestamp(startDate);
-        query = query.gte("timestamp", startTimestamp);
-        console.log(
-          `🔍 Filtre début: ${startDate.toLocaleString()} -> ${startTimestamp}`
-        );
-      }
-
-      if (endDate) {
-        const endTimestamp = createLocalTimestamp(endDate);
-        query = query.lte("timestamp", endTimestamp);
-        console.log(
-          `🔍 Filtre fin: ${endDate.toLocaleString()} -> ${endTimestamp}`
-        );
-      }
-
-      if (badgeId) query = query.eq("badgeId", badgeId);
-
-      const { data, error, count } = await query;
-
-      if (error) {
-        console.error("Erreur getPresences:", error);
-        throw error;
-      }
-
-      if (data && data.length > 0) {
-        allPresences = [...allPresences, ...data];
-        console.log(
-          `📊 Récupéré ${data.length} présences (${from + 1}-${
-            from + data.length
-          }), total: ${allPresences.length}`
-        );
-      }
-
-      // Vérifier s'il y a encore des données
-      hasMore = data && data.length === pageSize;
-      from += pageSize;
-
-      // Sécurité : éviter les boucles infinies
-      if (from > 50000) {
-        console.warn(
-          "⚠️ Limitation de sécurité atteinte (50k enregistrements)"
-        );
-        break;
-      }
-    }
-
-    console.log(`✅ Total final: ${allPresences.length} présences récupérées`);
-    return allPresences;
-  },
-
-  async getPresencesWithMembers(startDate = null, endDate = null) {
-    const presences = await this.getPresences(startDate, endDate);
-    const members = await this.getMembers();
-    const membersMap = {};
-    members.forEach((m) => {
-      if (m.badgeId) membersMap[m.badgeId] = m;
-    });
-
-    return presences.map((presence) => ({
-      ...presence,
-      member: membersMap[presence.badgeId] || null,
-    }));
-  },
-
-  async createPresence(badgeId, timestamp = new Date()) {
-    // CORRECTION: Utiliser le timestamp local correct
-    const localTimestamp = createLocalTimestamp(timestamp);
-
-    console.log(
-      `📝 Création présence: ${badgeId} à ${timestamp.toLocaleString()} -> ${localTimestamp}`
-    );
-
-    const { data, error } = await supabase
-      .from("presences")
-      .insert([{ badgeId, timestamp: localTimestamp }])
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === "23505") {
-        console.warn("Présence déjà enregistrée:", badgeId, timestamp);
-        return null;
-      }
-      console.error("Erreur createPresence:", error);
-      throw error;
-    }
-
-    return data;
-  },
-
-  async deletePresence(id) {
-    const { error } = await supabase.from("presences").delete().eq("id", id);
-
-    if (error) {
-      console.error("Erreur deletePresence:", error);
-      throw error;
-    }
-  },
-
-  async deletePresencesByBadgeId(badgeId) {
-    const { error } = await supabase
-      .from("presences")
-      .delete()
-      .eq("badgeId", badgeId);
-
-    if (error) {
-      console.error("Erreur deletePresencesByBadgeId:", error);
-      throw error;
-    }
-  },
-
-  async getPayments(memberId = null) {
-    let query = supabase
-      .from("payments")
-      .select(`*, member:members(id, name, firstName, badgeId)`)
-      .order("date_paiement", { ascending: false });
-
-    if (memberId) query = query.eq("member_id", memberId);
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error("Erreur getPayments:", error);
-      throw error;
-    }
-
+const MembersService = {
+  async list({ page = 0, limit = 50, select = "id, firstName, lastName, sex, student, photo, startDate, endDate, subscriptionType" } = {}) {
+    let q = supabase.from("members").select(select, { count: "exact", head: false }).order("lastName", { ascending: true });
+    q = paginate(q, { page, limit });
+    const { data, error } = await q;
+    if (error) throw error;
     return data || [];
   },
 
-  async createPayment(paymentData) {
-    const { data, error } = await supabase
-      .from("payments")
-      .insert([paymentData])
-      .select(`*, member:members(id, name, firstName, badgeId)`)
-      .single();
-
-    if (error) {
-      console.error("Erreur createPayment:", error);
-      throw error;
-    }
-
+  async getById(id, { select = "*" } = {}) {
+    const { data, error } = await supabase.from("members").select(select).eq("id", id).single();
+    if (error) throw error;
     return data;
   },
 
-  async updatePayment(id, paymentData) {
-    const { data, error } = await supabase
-      .from("payments")
-      .update(paymentData)
-      .eq("id", id)
-      .select(`*, member:members(id, name, firstName, badgeId)`)
-      .single();
-
-    if (error) {
-      console.error("Erreur updatePayment:", error);
-      throw error;
-    }
-
+  async create(payload) {
+    // ⚠️ Veille: certains schémas exigent .select().single() pour renvoyer la ligne
+    const { data, error } = await supabase.from("members").insert(payload).select().single();
+    if (error) throw error;
     return data;
   },
 
-  async deletePayment(id) {
-    const { error } = await supabase.from("payments").delete().eq("id", id);
-
-    if (error) {
-      console.error("Erreur deletePayment:", error);
-      throw error;
-    }
+  async update(id, payload) {
+    const { data, error } = await supabase.from("members").update(payload).eq("id", id).select().maybeSingle();
+    if (error) throw error;
+    return data;
   },
 
-  async togglePaymentStatus(id, isPaid) {
-    return this.updatePayment(id, { is_paid: isPaid });
-  },
-
-  async uploadFile(bucket, path, file) {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .upload(path, file, { cacheControl: "3600", upsert: false });
-
-    if (error) {
-      console.error("Erreur uploadFile:", error);
-      throw error;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from(bucket)
-      .getPublicUrl(data.path);
-
-    return {
-      path: data.path,
-      publicUrl: urlData.publicUrl,
-    };
-  },
-
-  async deleteFile(bucket, path) {
-    const { error } = await supabase.storage.from(bucket).remove([path]);
-
-    if (error) {
-      console.error("Erreur deleteFile:", error);
-      throw error;
-    }
-  },
-
-  getPublicUrl(bucket, path) {
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-
-    return data.publicUrl;
-  },
-
-  async getStatistics() {
-    try {
-      // Pagination Supabase (par 1000)
-      const pageSize = 1000;
-      const fetchAll = async (table) => {
-        let allData = [];
-        let from = 0;
-        let to = pageSize - 1;
-        while (true) {
-          const { data, error, count } = await supabase
-            .from(table)
-            .select("*", { count: "exact" })
-            .range(from, to);
-          if (error) throw error;
-          allData = [...allData, ...data];
-          if (data.length < pageSize) break;
-          from += pageSize;
-          to += pageSize;
-        }
-        return allData;
-      };
-
-      const [members, presences, payments] = await Promise.all([
-        fetchAll("members"),
-        fetchAll("presences"),
-        fetchAll("payments"),
-      ]);
-
-      const today = new Date();
-      const stats = {
-        total: members.length,
-        actifs: 0,
-        expirés: 0,
-        hommes: 0,
-        femmes: 0,
-        etudiants: 0,
-        membresExpirés: [],
-      };
-
-      members.forEach((member) => {
-        if (member.endDate) {
-          try {
-            const endDate = new Date(member.endDate);
-            if (endDate > today) stats.actifs++;
-            else {
-              stats.expirés++;
-              stats.membresExpirés.push({
-                id: member.id,
-                name: member.name,
-                firstName: member.firstName,
-                endDate: member.endDate,
-              });
-            }
-          } catch (e) {
-            stats.expirés++;
-          }
-        } else {
-          stats.expirés++;
-        }
-
-        if (member.gender === "Homme") stats.hommes++;
-        else if (member.gender === "Femme") stats.femmes++;
-        if (member.etudiant) stats.etudiants++;
-      });
-
-      return {
-        stats,
-        members,
-        presences,
-        payments,
-        totalPresences: presences.length,
-        totalPayments: payments.reduce(
-          (sum, p) => sum + parseFloat(p.amount || 0),
-          0
-        ),
-        unpaidPayments: payments.filter((p) => !p.is_paid).length,
-      };
-    } catch (error) {
-      console.error("Erreur getStatistics:", error);
-      throw error;
-    }
-  },
-
-  async testConnection() {
-    try {
-      const { data, error } = await supabase
-        .from("members")
-        .select("count(*)")
-        .single();
-
-      if (error) throw error;
-
-      console.log("✅ Connexion Supabase OK - Membres:", data.count);
-      return true;
-    } catch (error) {
-      console.error("❌ Erreur connexion Supabase:", error);
-      return false;
-    }
-  },
-
-  async cleanDuplicatePresences() {
-    try {
-      const { data, error } = await supabase.rpc("clean_duplicate_presences");
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      console.error("Erreur cleanDuplicatePresences:", error);
-      throw error;
-    }
-  },
-
-  // NOUVELLE FONCTION : Corriger les timestamps existants
-  async fixExistingTimestamps() {
-    try {
-      console.log("🔧 Début de la correction des timestamps...");
-
-      // Récupérer toutes les présences
-      const { data: presences, error } = await supabase
-        .from("presences")
-        .select("id, badgeId, timestamp");
-
-      if (error) throw error;
-
-      console.log(`📊 ${presences.length} présences à vérifier`);
-
-      let correctedCount = 0;
-
-      for (const presence of presences) {
-        // Vérifier si le timestamp a besoin d'être corrigé
-        if (presence.timestamp && presence.timestamp.includes("+00:00")) {
-          // Créer la version corrigée
-          const datePart = presence.timestamp.split("T")[0];
-          const timePart = presence.timestamp.split("T")[1].split("+")[0];
-          const correctedTimestamp = `${datePart}T${timePart}+00:00`;
-
-          // Mettre à jour seulement si différent
-          if (correctedTimestamp !== presence.timestamp) {
-            const { error: updateError } = await supabase
-              .from("presences")
-              .update({ timestamp: correctedTimestamp })
-              .eq("id", presence.id);
-
-            if (updateError) {
-              console.error(
-                `❌ Erreur correction présence ${presence.id}:`,
-                updateError
-              );
-            } else {
-              correctedCount++;
-            }
-          }
-        }
-      }
-
-      console.log(`✅ ${correctedCount} timestamps corrigés`);
-      return { corrected: correctedCount, total: presences.length };
-    } catch (error) {
-      console.error("❌ Erreur fixExistingTimestamps:", error);
-      throw error;
-    }
+  async remove(id) {
+    const { error } = await supabase.from("members").delete().eq("id", id);
+    if (error) throw error;
+    return true;
   },
 };
+
+/* ------------------------------------------------------------------
+   5) Services : PRESENCES
+      Table: "presences" (id, badgeId, timestamp) et/ou vue jointe
+------------------------------------------------------------------- */
+
+const PresencesService = {
+  /**
+   * getRange({ from, to, page, limit })
+   * Récupère les presences entre deux dates ISO (incluses).
+   */
+  async getRange({ from, to, page = 0, limit = 500 }) {
+    let q = supabase
+      .from("presences")
+      .select("id, badgeId, timestamp", { head: false })
+      .gte("timestamp", from)
+      .lte("timestamp", to)
+      .order("timestamp", { ascending: true });
+
+    q = paginate(q, { page, limit });
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  },
+};
+
+/* ------------------------------------------------------------------
+   6) Services : MESSAGES
+      - RPC "send_message" côté DB (si existant)
+      - v_inbox / v_outbox (vues) pour lecture
+      - table "message_recipients" pour le fallback d’envoi
+------------------------------------------------------------------- */
+
+const MessagesService = {
+  /**
+   * send({ sender_member_id, recipients: [memberId...], body, attachments? })
+   * Utilise l'RPC "send_message" si dispo, sinon fallback insertion manuelle.
+   */
+  async send({ sender_member_id, recipients = [], body, attachments = null }) {
+    // 1) Essai RPC (à privilégier)
+    const { data, error } = await supabase.rpc("send_message", {
+      p_sender_member_id: sender_member_id,
+      p_recipient_member_ids: recipients,
+      p_body: body,
+      p_attachments: attachments,
+    });
+
+    if (!error) return data;
+
+    // 2) Fallback manuel (si pas d'RPC ou RLS spécifique)
+    //   a) insert "messages"
+    const { data: msg, error: e1 } = await supabase
+      .from("messages")
+      .insert({ sender_member_id, body, attachments })
+      .select("id")
+      .single();
+    if (e1) throw e1;
+
+    //   b) insert "message_recipients"
+    if (recipients?.length) {
+      const rows = recipients.map((rid) => ({ message_id: msg.id, recipient_member_id: rid }));
+      const { error: e2 } = await supabase.from("message_recipients").insert(rows);
+      if (e2) throw e2;
+    }
+    return { id: msg.id };
+  },
+
+  async inbox(memberId, { page = 0, limit = 50 }) {
+    // Utilise une vue "v_inbox" si elle existe, sinon jointure simple
+    let q = supabase.from("v_inbox").select("*").eq("recipient_member_id", memberId).order("created_at", { ascending: false });
+    q = paginate(q, { page, limit });
+    const { data, error } = await q;
+    if (!error && data) return data;
+
+    // Fallback si pas de vue
+    let q2 = supabase
+      .from("messages")
+      .select("id, created_at, body, sender_member_id, message_recipients (recipient_member_id)")
+      .contains("message_recipients", [{ recipient_member_id: memberId }])
+      .order("created_at", { ascending: false });
+    q2 = paginate(q2, { page, limit });
+    const { data: d2, error: e2 } = await q2;
+    if (e2) throw e2;
+    return d2 || [];
+  },
+
+  async outbox(memberId, { page = 0, limit = 50 }) {
+    let q = supabase.from("v_outbox").select("*").eq("sender_member_id", memberId).order("created_at", { ascending: false });
+    q = paginate(q, { page, limit });
+    const { data, error } = await q;
+    if (!error && data) return data;
+
+    // Fallback si pas de vue
+    let q2 = supabase
+      .from("messages")
+      .select("id, created_at, body, sender_member_id, message_recipients (recipient_member_id)")
+      .eq("sender_member_id", memberId)
+      .order("created_at", { ascending: false });
+    q2 = paginate(q2, { page, limit });
+    const { data: d2, error: e2 } = await q2;
+    if (e2) throw e2;
+    return d2 || [];
+  },
+};
+
+/* ------------------------------------------------------------------
+   7) Services : PAYMENTS (basique)
+      Table: "payments" (id, member_id, amount, due_date, paid, method, ...)
+------------------------------------------------------------------- */
+
+const PaymentsService = {
+  async list({ page = 0, limit = 50, select = "id, member_id, amount, due_date, paid, method, created_at" } = {}) {
+    let q = supabase.from("payments").select(select).order("due_date", { ascending: true });
+    q = paginate(q, { page, limit });
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  },
+
+  async forMember(memberId, { page = 0, limit = 100, select = "id, member_id, amount, due_date, paid, method, created_at" } = {}) {
+    let q = supabase.from("payments").select(select).eq("member_id", memberId).order("due_date", { ascending: true });
+    q = paginate(q, { page, limit });
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  },
+};
+
+/* ------------------------------------------------------------------
+   8) Services : FILES (lecture URL, suppression)
+------------------------------------------------------------------- */
+
+const FilesService = {
+  photoUrl(path) {
+    return getPhotoUrl(path);
+  },
+  documentUrl(path) {
+    return getDocumentUrl(path);
+  },
+  async removePhoto(path) {
+    const { error } = await supabase.storage.from("photo").remove([path]);
+    if (error) throw error;
+    publicUrlCache.delete(`photo/${path}`);
+    return true;
+  },
+  async removeDocument(path) {
+    const { error } = await supabase.storage.from("documents").remove([path]);
+    if (error) throw error;
+    publicUrlCache.delete(`documents/${path}`);
+    return true;
+  },
+};
+
+/* ------------------------------------------------------------------
+   9) Services : STATS (exemple simple, à compléter selon tes besoins)
+------------------------------------------------------------------- */
+
+const StatsService = {
+  /**
+   * getDashboard()
+   * Exemple minimal: compte membres, présences période récente.
+   */
+  async getDashboard({ from, to } = {}) {
+    // Compte membres (estimation plus rapide qu'exact)
+    const { count: membersCount, error: e1 } = await supabase.from("members").select("*", { count: "estimated", head: true });
+    if (e1) throw e1;
+
+    // Compte presences sur la période si fournie
+    let presencesCount = 0;
+    if (from && to) {
+      const { count, error: e2 } = await supabase
+        .from("presences")
+        .select("*", { count: "estimated", head: true })
+        .gte("timestamp", from)
+        .lte("timestamp", to);
+      if (e2) throw e2;
+      presencesCount = count || 0;
+    }
+
+    return { membersCount: membersCount || 0, presencesCount };
+  },
+};
+
+/* ------------------------------------------------------------------
+   10) supabaseServices — agrégateur exporté (compatibilité)
+------------------------------------------------------------------- */
+
+export const supabaseServices = {
+  members: MembersService,
+  presences: PresencesService,
+  messages: MessagesService,
+  payments: PaymentsService,
+  files: FilesService,
+  stats: StatsService,
+
+  // Raccourcis utiles déjà prêts si tu préfères un import unique
+  uploadPhoto,
+  uploadDocument,
+  getPhotoUrl,
+  getDocumentUrl,
+  getPublicUrlCached,
+};
+
+/* ------------------------------------------------------------------
+   NOTES D’INTÉGRATION :
+   - Remplace dans le code appelant les uploads directs par les helpers :
+       await supabase.storage.from('photo').upload(path, file, { upsert: true })
+         → await uploadPhoto(path, file)
+       await supabase.storage.from('documents').upload(path, file, { upsert: true })
+         → await uploadDocument(path, file)
+   - Ne pas ajouter de query params type ?t=Date.now() aux URLs d’images.
+   - Pour les listes longues : limiter les colonnes (pas de select('*')), paginer.
+   - Les publicUrl sont mémorisées en mémoire (publicUrlCache)
+------------------------------------------------------------------- */
