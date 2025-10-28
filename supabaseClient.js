@@ -110,8 +110,12 @@ const MembersService = {
   },
 
   async create(payload) {
-    // ⚠️ Veille: certains schémas exigent .select().single() pour renvoyer la ligne
-    const { data, error } = await supabase.from("members").insert(payload).select().single();
+    // Ajout automatique de last_subscription_date lors de la création
+    const dataToInsert = {
+      ...payload,
+      last_subscription_date: new Date().toISOString(),
+    };
+    const { data, error } = await supabase.from("members").insert(dataToInsert).select().single();
     if (error) throw error;
     return data;
   },
