@@ -1,6 +1,6 @@
 {
-  "name": "club-musculation-backend",
-  "version": "1.0.0",
+  "name": "bodyforce-backend",
+  "version": "2.3.7",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
