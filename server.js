@@ -13,12 +13,21 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // --- Middleware global ---
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://bodyforce-frontend.onrender.com"
+];
+
 app.use(
   cors({
-    origin:
-      process.env.NODE_ENV === "production"
-        ? "https://bodyforce-frontend.onrender.com"
-        : "http://localhost:3000",
+    origin: function (origin, callback) {
+      // Autoriser les requêtes sans origin (comme les appels API directs)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS non autorisé"), false);
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -31,12 +40,10 @@ app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(
   "/upload",
   (req, res, next) => {
-    res.setHeader(
-      "Access-Control-Allow-Origin",
-      process.env.NODE_ENV === "production"
-        ? "https://bodyforce-frontend.onrender.com"
-        : "http://localhost:3000"
-    );
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
