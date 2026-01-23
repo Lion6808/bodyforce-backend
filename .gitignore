@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contient les mots de passe)
+.env
+
+# Databases
+*.db
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/

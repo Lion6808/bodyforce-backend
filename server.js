@@ -7,6 +7,7 @@ const path = require("path");
 const bcrypt = require("bcrypt");
 const fs = require("fs");
 const xlsx = require("xlsx");
+const nodemailer = require("nodemailer");
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -58,6 +59,28 @@ ensureDir(path.join(__dirname, "upload/files"));
 // --- Connexions aux bases de données ---
 const db = new sqlite3.Database("./club.db");
 const usersDb = new sqlite3.Database("./users.db");
+
+// --- Configuration Nodemailer pour Gmail ---
+const emailTransporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
+
+// Vérification de la configuration email au démarrage
+if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+  emailTransporter.verify((error) => {
+    if (error) {
+      console.error("Erreur configuration email:", error.message);
+    } else {
+      console.log("Serveur email prêt à envoyer des messages");
+    }
+  });
+} else {
+  console.warn("Variables GMAIL_USER et/ou GMAIL_APP_PASSWORD non définies - Email désactivé");
+}
 
 // --- Logging simple ---
 app.use((req, res, next) => {
@@ -558,6 +581,78 @@ app.get("/api/list-files", (req, res) => {
     console.error("Erreur lors du listing des fichiers :", err);
     res.status(500).json({ error: "Erreur lors du listing des fichiers." });
   }
+});
+
+// --- Routes Email ---
+app.post("/api/email/send", isAdmin, async (req, res) => {
+  const { recipients, subject, body, replyTo } = req.body;
+
+  // Validation
+  if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+    return res.status(400).json({ error: "Liste de destinataires requise" });
+  }
+  if (!subject || !body) {
+    return res.status(400).json({ error: "Sujet et contenu requis" });
+  }
+
+  // Vérifier configuration email
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    return res.status(500).json({ error: "Configuration email non définie sur le serveur" });
+  }
+
+  const results = {
+    sent: [],
+    failed: [],
+  };
+
+  // Envoyer les emails un par un (pour personnalisation et éviter spam)
+  for (const recipient of recipients) {
+    try {
+      const mailOptions = {
+        from: `"BodyForce Club" <${process.env.GMAIL_USER}>`,
+        to: recipient.email,
+        replyTo: replyTo || process.env.GMAIL_USER,
+        subject: subject,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+              <h1 style="color: white; margin: 0;">BodyForce</h1>
+            </div>
+            <div style="padding: 20px; background: #f9f9f9;">
+              <p>Bonjour ${recipient.firstName || recipient.name || ""},</p>
+              ${body.replace(/\n/g, "<br>")}
+            </div>
+            <div style="padding: 15px; background: #333; color: #999; text-align: center; font-size: 12px;">
+              <p style="margin: 0;">BodyForce Club - Votre salle de sport</p>
+            </div>
+          </div>
+        `,
+        text: `Bonjour ${recipient.firstName || recipient.name || ""},\n\n${body}\n\n--\nBodyForce Club`,
+      };
+
+      await emailTransporter.sendMail(mailOptions);
+      results.sent.push({ email: recipient.email, name: recipient.firstName || recipient.name });
+      console.log(`Email envoyé à: ${recipient.email}`);
+    } catch (error) {
+      console.error(`Erreur envoi email à ${recipient.email}:`, error.message);
+      results.failed.push({ email: recipient.email, error: error.message });
+    }
+  }
+
+  res.json({
+    success: results.failed.length === 0,
+    message: `${results.sent.length} email(s) envoyé(s), ${results.failed.length} échec(s)`,
+    results,
+  });
+});
+
+// Route pour tester la configuration email
+app.get("/api/email/status", isAdmin, (req, res) => {
+  const configured = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
+  res.json({
+    configured,
+    email: configured ? process.env.GMAIL_USER : null,
+  });
 });
 
 // --- Lancement Render-compatible ---
