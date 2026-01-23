@@ -618,7 +618,7 @@ app.post("/api/email/send", isAdmin, async (req, res) => {
       `;
 
       await resend.emails.send({
-        from: "BodyForce Club <onboarding@resend.dev>",
+        from: "BodyForce Club <contact@at7.fr>",
         to: recipient.email,
         subject: subject,
         html: htmlContent,
