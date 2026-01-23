@@ -7,7 +7,7 @@ const path = require("path");
 const bcrypt = require("bcrypt");
 const fs = require("fs");
 const xlsx = require("xlsx");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -67,26 +67,13 @@ ensureDir(path.join(__dirname, "upload/files"));
 const db = new sqlite3.Database("./club.db");
 const usersDb = new sqlite3.Database("./users.db");
 
-// --- Configuration Nodemailer pour Gmail ---
-const emailTransporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-});
+// --- Configuration Resend pour l'envoi d'emails ---
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
-// Vérification de la configuration email au démarrage
-if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-  emailTransporter.verify((error) => {
-    if (error) {
-      console.error("Erreur configuration email:", error.message);
-    } else {
-      console.log("Serveur email prêt à envoyer des messages");
-    }
-  });
+if (resend) {
+  console.log("Service email Resend configuré et prêt");
 } else {
-  console.warn("Variables GMAIL_USER et/ou GMAIL_APP_PASSWORD non définies - Email désactivé");
+  console.warn("Variable RESEND_API_KEY non définie - Email désactivé");
 }
 
 // --- Logging simple ---
@@ -590,9 +577,9 @@ app.get("/api/list-files", (req, res) => {
   }
 });
 
-// --- Routes Email ---
+// --- Routes Email (Resend) ---
 app.post("/api/email/send", isAdmin, async (req, res) => {
-  const { recipients, subject, body, replyTo } = req.body;
+  const { recipients, subject, body } = req.body;
 
   // Validation
   if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
@@ -602,8 +589,8 @@ app.post("/api/email/send", isAdmin, async (req, res) => {
     return res.status(400).json({ error: "Sujet et contenu requis" });
   }
 
-  // Vérifier configuration email
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+  // Vérifier configuration Resend
+  if (!resend) {
     return res.status(500).json({ error: "Configuration email non définie sur le serveur" });
   }
 
@@ -612,32 +599,31 @@ app.post("/api/email/send", isAdmin, async (req, res) => {
     failed: [],
   };
 
-  // Envoyer les emails un par un (pour personnalisation et éviter spam)
+  // Envoyer les emails un par un (pour personnalisation)
   for (const recipient of recipients) {
     try {
-      const mailOptions = {
-        from: `"BodyForce Club" <${process.env.GMAIL_USER}>`,
-        to: recipient.email,
-        replyTo: replyTo || process.env.GMAIL_USER,
-        subject: subject,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0;">BodyForce</h1>
-            </div>
-            <div style="padding: 20px; background: #f9f9f9;">
-              <p>Bonjour ${recipient.firstName || recipient.name || ""},</p>
-              ${body.replace(/\n/g, "<br>")}
-            </div>
-            <div style="padding: 15px; background: #333; color: #999; text-align: center; font-size: 12px;">
-              <p style="margin: 0;">BodyForce Club - Votre salle de sport</p>
-            </div>
+      const htmlContent = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+            <h1 style="color: white; margin: 0;">BodyForce</h1>
           </div>
-        `,
-        text: `Bonjour ${recipient.firstName || recipient.name || ""},\n\n${body}\n\n--\nBodyForce Club`,
-      };
+          <div style="padding: 20px; background: #f9f9f9;">
+            <p>Bonjour ${recipient.firstName || recipient.name || ""},</p>
+            ${body.replace(/\n/g, "<br>")}
+          </div>
+          <div style="padding: 15px; background: #333; color: #999; text-align: center; font-size: 12px;">
+            <p style="margin: 0;">BodyForce Club - Votre salle de sport</p>
+          </div>
+        </div>
+      `;
 
-      await emailTransporter.sendMail(mailOptions);
+      await resend.emails.send({
+        from: "BodyForce Club <onboarding@resend.dev>",
+        to: recipient.email,
+        subject: subject,
+        html: htmlContent,
+      });
+
       results.sent.push({ email: recipient.email, name: recipient.firstName || recipient.name });
       console.log(`Email envoyé à: ${recipient.email}`);
     } catch (error) {
@@ -655,10 +641,10 @@ app.post("/api/email/send", isAdmin, async (req, res) => {
 
 // Route pour tester la configuration email
 app.get("/api/email/status", isAdmin, (req, res) => {
-  const configured = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
+  const configured = !!resend;
   res.json({
     configured,
-    email: configured ? process.env.GMAIL_USER : null,
+    service: configured ? "Resend" : null,
   });
 });
 
