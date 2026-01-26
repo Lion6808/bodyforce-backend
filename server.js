@@ -578,6 +578,10 @@ app.get("/api/list-files", (req, res) => {
 });
 
 // --- Routes Email (Resend) ---
+
+// Fonction utilitaire pour le throttling (respect limite Resend: 2 emails/seconde)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 app.post("/api/email/send", isAdmin, async (req, res) => {
   const { recipients, subject, body } = req.body;
 
@@ -599,8 +603,12 @@ app.post("/api/email/send", isAdmin, async (req, res) => {
     failed: [],
   };
 
-  // Envoyer les emails un par un (pour personnalisation)
-  for (const recipient of recipients) {
+  console.log(`Début envoi de ${recipients.length} email(s) avec throttling (2/sec)...`);
+
+  // Envoyer les emails avec throttling (2 par seconde max)
+  for (let i = 0; i < recipients.length; i++) {
+    const recipient = recipients[i];
+
     try {
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -625,12 +633,20 @@ app.post("/api/email/send", isAdmin, async (req, res) => {
       });
 
       results.sent.push({ email: recipient.email, name: recipient.firstName || recipient.name });
-      console.log(`Email envoyé à: ${recipient.email}`);
+      console.log(`[${i + 1}/${recipients.length}] Email envoyé à: ${recipient.email}`);
     } catch (error) {
-      console.error(`Erreur envoi email à ${recipient.email}:`, error.message);
+      console.error(`[${i + 1}/${recipients.length}] Erreur envoi email à ${recipient.email}:`, error.message);
       results.failed.push({ email: recipient.email, error: error.message });
     }
+
+    // Throttling: attendre 550ms après chaque email (≈ 1.8 emails/sec, sous la limite de 2/sec)
+    // On attend sauf si c'est le dernier email
+    if (i < recipients.length - 1) {
+      await delay(550);
+    }
   }
+
+  console.log(`Envoi terminé: ${results.sent.length} succès, ${results.failed.length} échec(s)`);
 
   res.json({
     success: results.failed.length === 0,
