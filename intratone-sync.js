@@ -1,5 +1,8 @@
-// intratone-sync.js — Synchronisation automatique Intratone → Supabase
-// Flux corrigé : Login → connect.php → evts.php → evts_recup → Attendre → evts_infos (Refresh) → evts_list → Parser → Supabase
+// 🔹 Fichier: intratone-sync.js
+// Type: Node.js
+// Dossier: /
+// Date: 2026-01-27
+// Description: Synchronisation automatique Intratone → Supabase (CRON-ready)
 
 const https = require("https");
 
@@ -9,7 +12,7 @@ const INTRATONE = {
   mdp: process.env.INTRATONE_PASSWORD || "",
   device: process.env.INTRATONE_DEVICE || "0d24dac0-647c-4853-bfab-deda515fd2a4",
   installationId: process.env.INTRATONE_INSTALLATION_ID || "114449",
-  recupId: process.env.INTRATONE_RECUP_ID || "91857", // ID du lecteur vu dans le HAR [cite: 26]
+  recupId: process.env.INTRATONE_RECUP_ID || "91857",
   host: "www.intratone.info",
 };
 
@@ -20,7 +23,6 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const RECUP_WAIT_MS = parseInt(process.env.INTRATONE_RECUP_WAIT_MS || "45000", 10);
 
 // --- Helpers HTTP ---
-
 function httpsRequest(options, postData) {
   return new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
@@ -74,7 +76,8 @@ function intratonePost(session, path, body) {
         "Content-Length": Buffer.byteLength(body),
         Cookie: toCookieStr(session.cookies),
         token: session.jwt,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
         "X-Requested-With": "XMLHttpRequest",
         Accept: "*/*",
         Origin: "https://www.intratone.info",
@@ -85,8 +88,7 @@ function intratonePost(session, path, body) {
   );
 }
 
-// --- Etape 1 : Login ---
-
+// --- Étape 1 : Login ---
 async function login() {
   const body = new URLSearchParams({
     identifiant: INTRATONE.identifiant,
@@ -102,7 +104,8 @@ async function login() {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         "Content-Length": Buffer.byteLength(body),
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
         Accept: "application/json, text/plain, */*",
         Origin: "https://www.intratone.info",
         Referer: "https://www.intratone.info/fr/",
@@ -111,16 +114,11 @@ async function login() {
     body
   );
 
-  if (res.status !== 200) {
-    throw new Error(`Login HTTP ${res.status}`);
-  }
+  if (res.status !== 200) throw new Error(`Login HTTP ${res.status}`);
 
   const cookies = parseCookies(res.headers);
   const sid = cookies.PHPSESSID || cookies.Intratoneinfo;
-
-  if (!sid) {
-    throw new Error(`Pas de session obtenue lors du login.`);
-  }
+  if (!sid) throw new Error(`Pas de session obtenue lors du login.`);
 
   let jwt = "";
   try {
@@ -139,11 +137,9 @@ async function login() {
   return { sid, jwt, cookies: allCookies };
 }
 
-// --- Etape 2 : Initialiser la session ---
-
+// --- Étape 2 : Initialiser la session ---
 async function initSession(session) {
   await intratonePost(session, "/fr/data/connect.php");
-  
   const evtsBody = `id=${INTRATONE.installationId}&SID=${session.sid}`;
   const evtsRes = await intratonePost(session, "/fr/data/events/evts.php", evtsBody);
   const evtsText = evtsRes.body.toString("utf-8");
@@ -154,10 +150,9 @@ async function initSession(session) {
   log("Module événements ouvert");
 }
 
-// --- Etape 3 : Déclencher la récupération ---
-
+// --- Étape 3 : Déclencher la récupération ---
 async function triggerRecup(session) {
-  const body = `id=${INTRATONE.recupId}`; // Utilise 918 [cite: 26]
+  const body = `id=${INTRATONE.recupId}`;
   const res = await intratonePost(session, "/fr/data/events/evts_recup.php", body);
   const text = res.body.toString("utf-8");
 
@@ -169,10 +164,8 @@ async function triggerRecup(session) {
   return false;
 }
 
-// --- Etape 4 : Rafraîchir le buffer (Action "Actualiser" du HAR) ---
-
+// --- Étape 4 : Rafraîchir le buffer ---
 async function refreshEventsBuffer(session) {
-  // Simule l'appel vu dans le HAR qui déclenche Evts_Infos [cite: 46, 71]
   const res = await intratonePost(session, "/fr/data/events/evts_infos.php");
   const text = res.body.toString("utf-8");
 
@@ -183,16 +176,14 @@ async function refreshEventsBuffer(session) {
   return false;
 }
 
-// --- Etape 5 : Lister les événements ---
-
+// --- Étape 5 : Lister les événements ---
 async function fetchEventsList(session) {
   const res = await intratonePost(session, "/fr/data/events/evts_list.php");
   if (res.status !== 200) throw new Error(`evts_list HTTP ${res.status}`);
   return res.body.toString("utf-8");
 }
 
-// --- Etape 6 : Parser le HTML ---
-
+// --- Étape 6 : Parser le HTML ---
 function parseEventsHTML(rawJson) {
   let html = "";
   try {
@@ -201,22 +192,17 @@ function parseEventsHTML(rawJson) {
   } catch {
     html = rawJson;
   }
-
   if (!html) return [];
 
   const events = [];
   const rows = html.split(/<tr[\s>]/i).slice(1);
-
   for (const row of rows) {
     if (row.includes("<th")) continue;
 
     const tds = [];
     const tdRegex = /<td[^>]*>([\s\S]*?)(?:<\/td>|<\\\/td>)/gi;
     let match;
-    while ((match = tdRegex.exec(row)) !== null) {
-      tds.push(match[1]);
-    }
-
+    while ((match = tdRegex.exec(row)) !== null) tds.push(match[1]);
     if (tds.length < 5) continue;
 
     const badgeId = tds[3].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim();
@@ -224,7 +210,6 @@ function parseEventsHTML(rawJson) {
 
     const dateParts = dateRaw.match(/(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
     if (!dateParts) continue;
-
     const [, day, month, year, hour, minute] = dateParts;
     const yr = parseInt(`20${year}`);
     const mo = parseInt(month);
@@ -235,24 +220,22 @@ function parseEventsHTML(rawJson) {
     const isSummer = mo >= 4 && mo <= 10;
     const offsetHours = isSummer ? 2 : 1;
     const fullDate = new Date(Date.UTC(yr, mo - 1, dy, hr - offsetHours, mi, 0));
-
     if (isNaN(fullDate.getTime())) continue;
 
     events.push({
       badgeId,
       timestamp: fullDate.toISOString(),
-      name: tds[4].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim() || null
+      name: tds[4].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim() || null,
     });
   }
   return events;
 }
 
-// --- Etape 7 : Supabase ---
-
+// --- Étape 7 : Supabase ---
 async function insertToSupabase(events) {
   if (!events.length || !SUPABASE_URL || !SUPABASE_KEY) return { inserted: 0 };
 
-  const batch = events.map((e) => ({ "badgeId": e.badgeId, "timestamp": e.timestamp }));
+  const batch = events.map((e) => ({ badgeId: e.badgeId, timestamp: e.timestamp }));
   const payload = JSON.stringify(batch);
   const parsedUrl = new URL(SUPABASE_URL);
   const restPath = parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/presences";
@@ -276,21 +259,17 @@ async function insertToSupabase(events) {
   return { inserted: res.status >= 200 && res.status < 300 ? batch.length : 0 };
 }
 
-// --- Orchestrateur ---
-
-async function syncIntratone(db, options = {}) {
+// --- Orchestrateur principal ---
+async function syncIntratone() {
   log("========== Début synchronisation ==========");
   try {
     const session = await login();
     await initSession(session);
 
     const recupOk = await triggerRecup(session);
-
     if (recupOk) {
       log(`Attente de ${RECUP_WAIT_MS / 1000}s...`);
       await wait(RECUP_WAIT_MS);
-      
-      // Nouvelle étape corrective issue du HAR 
       await refreshEventsBuffer(session);
     }
 
@@ -312,19 +291,5 @@ async function syncIntratone(db, options = {}) {
   }
 }
 
-// --- Export & Planning ---
-
-let _intervalHandle = null;
-
-function startIntratoneSync(db, intervalMinutes = 5) {
-  if (!INTRATONE.identifiant || !INTRATONE.mdp) return log("Config manquante.");
-  
-  log(`Sync planifiée: ${intervalMinutes} min`);
-  
-  // Premier lancement après 10s
-  setTimeout(() => syncIntratone(db), 10000);
-
-  _intervalHandle = setInterval(() => syncIntratone(db), intervalMinutes * 60 * 1000);
-}
-
-module.exports = { syncIntratone, startIntratoneSync };
+// --- Export pour CRON ---
+module.exports = { syncIntratone };
