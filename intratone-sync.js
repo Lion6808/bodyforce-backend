@@ -286,11 +286,16 @@ async function insertToSupabase(events) {
 
     const payload = JSON.stringify(batch);
     const parsedUrl = new URL(SUPABASE_URL);
+    const restPath = parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/presences";
+
+    if (i === 0) {
+      log(`Supabase POST → ${parsedUrl.hostname}${restPath} (${batch.length} lignes)`);
+    }
 
     const res = await httpsRequest(
       {
         hostname: parsedUrl.hostname,
-        path: "/rest/v1/presences",
+        path: restPath,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -308,7 +313,7 @@ async function insertToSupabase(events) {
     } else {
       totalErrors += batch.length;
       const errText = res.body.toString("utf-8");
-      log(`Erreur Supabase lot ${i / BATCH_SIZE + 1}: HTTP ${res.status} - ${errText.substring(0, 200)}`);
+      log(`Erreur Supabase lot ${i / BATCH_SIZE + 1}: HTTP ${res.status} - URL: ${parsedUrl.hostname}${restPath} - ${errText.substring(0, 300)}`);
     }
   }
 
@@ -320,17 +325,19 @@ async function insertToSupabase(events) {
 function insertToSQLite(db, events) {
   return new Promise((resolve) => {
     if (!db || !events.length) return resolve({ inserted: 0 });
-    try {
+    // Vérifier que la table existe avant d'insérer
+    db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='presences'", (err, row) => {
+      if (err || !row) {
+        log("SQLite ignoré: table presences inexistante");
+        return resolve({ inserted: 0, error: "table presences inexistante" });
+      }
       let inserted = 0;
       const stmt = db.prepare("INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)");
       for (const e of events) {
-        stmt.run(e.badgeId, e.timestamp, (err) => { if (!err) inserted++; });
+        stmt.run(e.badgeId, e.timestamp, (runErr) => { if (!runErr) inserted++; });
       }
       stmt.finalize(() => resolve({ inserted }));
-    } catch (err) {
-      log(`SQLite ignoré: ${err.message}`);
-      resolve({ inserted: 0, error: err.message });
-    }
+    });
   });
 }
 
