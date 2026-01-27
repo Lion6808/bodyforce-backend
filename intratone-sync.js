@@ -330,55 +330,78 @@ function insertToSQLite(db, events) {
 
 // --- Orchestrateur principal ---
 
-async function syncIntratone(db) {
+async function syncIntratone(db, options = {}) {
+  const debug = options.debug || false;
+  const debugInfo = { steps: [] };
+  const step = (name, detail) => {
+    log(`[${name}] ${typeof detail === "string" ? detail : JSON.stringify(detail).substring(0, 300)}`);
+    if (debug) debugInfo.steps.push({ name, detail: typeof detail === "string" ? detail : JSON.stringify(detail).substring(0, 500) });
+  };
+
   log("========== Début synchronisation ==========");
   log(new Date().toISOString());
 
   try {
     // 1. Login
     const session = await login();
+    step("login", `SID: ${session.sid.substring(0, 10)}... JWT: ${session.jwt ? "oui" : "non"}`);
 
     // 2. Initialiser la session (connect.php + ouvrir module événements)
     await initSession(session);
+    step("initSession", "OK");
 
     // 3. Déclencher la récupération depuis la centrale physique
     const recupOk = await triggerRecup(session);
+    step("triggerRecup", recupOk ? "OK" : "échoué (non bloquant)");
 
     // 4. Attendre que la centrale remonte les données (seulement si recup OK)
     if (recupOk) {
       log(`Attente ${RECUP_WAIT_MS / 1000}s pour la remontée des données...`);
       await wait(RECUP_WAIT_MS);
+      step("wait", `${RECUP_WAIT_MS / 1000}s`);
     }
 
     // 5. Lister les événements
     const rawResponse = await fetchEventsList(session);
+    step("fetchEventsList", `Réponse brute: ${rawResponse.substring(0, 500)}`);
 
     // 6. Parser le HTML
     const events = parseEventsHTML(rawResponse);
     log(`${events.length} passage(s) badge détecté(s)`);
+    step("parseEventsHTML", `${events.length} événement(s) parsé(s)`);
 
     if (events.length > 0) {
-      log(`Exemple: ${events[0].badgeId} → ${events[0].timestamp} (${events[0].name || "?"})`);
+      const lastEvent = events[events.length - 1];
+      const firstEvent = events[0];
+      log(`Premier: ${firstEvent.badgeId} → ${firstEvent.timestamp} (${firstEvent.name || "?"})`);
+      log(`Dernier: ${lastEvent.badgeId} → ${lastEvent.timestamp} (${lastEvent.name || "?"})`);
+      if (debug) {
+        debugInfo.firstEvent = firstEvent;
+        debugInfo.lastEvent = lastEvent;
+        debugInfo.sampleEvents = events.slice(0, 5);
+      }
     }
 
     if (events.length === 0) {
       log("Rien à insérer.");
-      return { success: true, events: 0 };
+      return { success: true, events: 0, ...(debug ? { debug: debugInfo } : {}) };
     }
 
     // 7. Insérer dans Supabase
     const supaResult = await insertToSupabase(events);
     log(`Supabase: ${supaResult.inserted} inséré(s), ${supaResult.errors || 0} erreur(s)`);
+    step("insertToSupabase", supaResult);
 
     // 8. Insérer dans SQLite (si db fournie)
     const sqliteResult = await insertToSQLite(db, events);
     if (db) log(`SQLite: ${sqliteResult.inserted} inséré(s)`);
 
     log("========== Synchronisation terminée ==========");
-    return { success: true, events: events.length, supabase: supaResult, sqlite: sqliteResult };
+    return { success: true, events: events.length, supabase: supaResult, sqlite: sqliteResult, ...(debug ? { debug: debugInfo } : {}) };
   } catch (err) {
     log(`ERREUR: ${err.message}`);
-    return { success: false, error: err.message };
+    step("error", err.message);
+    return { success: false, error: err.message, ...(debug ? { debug: debugInfo } : {}) };
   }
 }
 

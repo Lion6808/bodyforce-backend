@@ -668,7 +668,8 @@ app.get("/api/email/status", isAdmin, (req, res) => {
 // --- Routes Intratone ---
 app.post("/api/intratone/sync", isAdmin, async (req, res) => {
   try {
-    const result = await syncIntratone(db);
+    const debug = req.query.debug === "1" || req.body?.debug === true;
+    const result = await syncIntratone(db, { debug });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
