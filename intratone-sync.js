@@ -139,8 +139,9 @@ async function login() {
     ...cookies,
   };
 
+  const rawLogin = res.body.toString("utf-8").substring(0, 500);
   log(`Connecté (SID: ${sid.substring(0, 10)}...)`);
-  return { sid, jwt, cookies: allCookies };
+  return { sid, jwt, cookies: allCookies, _rawLogin: rawLogin };
 }
 
 // --- Etape 2 : Initialiser la session (connect.php + evts.php) ---
@@ -344,7 +345,7 @@ async function syncIntratone(db, options = {}) {
   try {
     // 1. Login
     const session = await login();
-    step("login", `SID: ${session.sid.substring(0, 10)}... JWT: ${session.jwt ? "oui" : "non"}`);
+    step("login", `SID: ${session.sid.substring(0, 10)}... JWT: ${session.jwt ? "oui" : "non"} loginBody: ${session._rawLogin || "N/A"}`);
 
     // 2. Initialiser la session (connect.php + ouvrir module événements)
     await initSession(session);
