@@ -320,12 +320,17 @@ async function insertToSupabase(events) {
 function insertToSQLite(db, events) {
   return new Promise((resolve) => {
     if (!db || !events.length) return resolve({ inserted: 0 });
-    let inserted = 0;
-    const stmt = db.prepare("INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)");
-    for (const e of events) {
-      stmt.run(e.badgeId, e.timestamp, (err) => { if (!err) inserted++; });
+    try {
+      let inserted = 0;
+      const stmt = db.prepare("INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)");
+      for (const e of events) {
+        stmt.run(e.badgeId, e.timestamp, (err) => { if (!err) inserted++; });
+      }
+      stmt.finalize(() => resolve({ inserted }));
+    } catch (err) {
+      log(`SQLite ignoré: ${err.message}`);
+      resolve({ inserted: 0, error: err.message });
     }
-    stmt.finalize(() => resolve({ inserted }));
   });
 }
 
