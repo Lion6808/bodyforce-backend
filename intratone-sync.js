@@ -218,17 +218,11 @@ function parseEventsHTML(rawJson) {
     // Ignorer l'en-tête
     if (row.includes("<th")) continue;
 
-    // Extraire data-serial du badge (format hex ex: 0140B45A)
+    // On a besoin de data-serial pour détecter les lignes badge, mais le vrai
+    // badge ID est dans td[3] (même format que la colonne "Qui" de l'Excel)
     const serialMatch = row.match(/data-serial="([^"]+)"/);
     if (!serialMatch) continue;
-
     const rawSerial = serialMatch[1].trim();
-    if (!rawSerial) continue;
-
-    // Convertir hex → décimal 10 chiffres avec zéros (ex: 0140B45A → 0020988506)
-    const decVal = parseInt(rawSerial, 16);
-    const badgeId = isNaN(decVal) ? rawSerial : String(decVal).padStart(10, "0");
-    if (!badgeId) continue;
 
     // Extraire tous les <td>...</td>
     // Le HTML Intratone utilise <\/td> (JSON-escaped) ou </td>
@@ -241,7 +235,9 @@ function parseEventsHTML(rawJson) {
 
     if (tds.length < 5) continue;
 
-    // td[0] = icône, td[1] = date, td[2] = type, td[3] = serial, td[4] = nom
+    // td[0] = icône, td[1] = date, td[2] = type, td[3] = badgeId (=Excel "Qui"), td[4] = nom
+    const badgeId = tds[3].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim();
+    if (!badgeId) continue;
     const dateRaw = tds[1]
       .replace(/<[^>]*>/g, "")
       .replace(/\\n/g, "")
@@ -252,7 +248,22 @@ function parseEventsHTML(rawJson) {
     if (!dateParts) continue;
 
     const [, day, month, year, hour, minute] = dateParts;
-    const fullDate = new Date(`20${year}-${month}-${day}T${hour}:${minute}:00`);
+    // L'heure Intratone est en heure française (Europe/Paris)
+    // L'import Excel tourne dans le navigateur (timezone locale FR) donc
+    // new Date("...T11:59:00") → toISOString() = "...T10:59:00Z" (UTC-1 en hiver)
+    // Sur Render (UTC), on doit explicitement spécifier le fuseau FR
+    // CET = UTC+1 (hiver), CEST = UTC+2 (été)
+    // Déterminer si la date est en heure d'été (dernier dimanche mars → dernier dimanche octobre)
+    const yr = parseInt(`20${year}`);
+    const mo = parseInt(month);
+    const dy = parseInt(day);
+    const hr = parseInt(hour);
+    const mi = parseInt(minute);
+    // Calcul simplifié : avril-octobre = été (+2), sinon hiver (+1)
+    // (approximation suffisante, les cas limites mars/octobre sont rares)
+    const isSummer = mo >= 4 && mo <= 10;
+    const offsetHours = isSummer ? 2 : 1;
+    const fullDate = new Date(Date.UTC(yr, mo - 1, dy, hr - offsetHours, mi, 0));
     if (isNaN(fullDate.getTime())) continue;
 
     const name = tds[4]
@@ -304,8 +315,8 @@ async function insertToSupabase(events) {
 
   for (let i = 0; i < events.length; i += BATCH_SIZE) {
     const batch = events.slice(i, i + BATCH_SIZE).map((e) => ({
-      badgeId: e.badgeId,
-      timestamp: e.timestamp,
+      "badgeId": e.badgeId,
+      "timestamp": e.timestamp,
     }));
 
     const payload = JSON.stringify(batch);
