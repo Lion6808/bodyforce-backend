@@ -344,6 +344,7 @@ async function syncIntratone(db, options = {}) {
 
   try {
     // 1. Login
+    step("config", `identifiant: [${INTRATONE.identifiant}] (len=${INTRATONE.identifiant.length}) mdp: [${INTRATONE.mdp.length} chars] device: ${INTRATONE.device.substring(0, 8)}...`);
     const session = await login();
     step("login", `SID: ${session.sid.substring(0, 10)}... JWT: ${session.jwt ? "oui" : "non"} loginBody: ${session._rawLogin || "N/A"}`);
 
