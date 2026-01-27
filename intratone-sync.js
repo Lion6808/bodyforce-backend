@@ -218,11 +218,16 @@ function parseEventsHTML(rawJson) {
     // Ignorer l'en-tête
     if (row.includes("<th")) continue;
 
-    // Extraire data-serial du badge
+    // Extraire data-serial du badge (format hex ex: 0140B45A)
     const serialMatch = row.match(/data-serial="([^"]+)"/);
     if (!serialMatch) continue;
 
-    const badgeId = serialMatch[1].trim();
+    const rawSerial = serialMatch[1].trim();
+    if (!rawSerial) continue;
+
+    // Convertir hex → décimal 10 chiffres avec zéros (ex: 0140B45A → 0020988506)
+    const decVal = parseInt(rawSerial, 16);
+    const badgeId = isNaN(decVal) ? rawSerial : String(decVal).padStart(10, "0");
     if (!badgeId) continue;
 
     // Extraire tous les <td>...</td>
