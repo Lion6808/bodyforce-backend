@@ -275,9 +275,13 @@ function parseEventsHTML(rawJson) {
       badgeId,
       timestamp: fullDate.toISOString(),
       name: name || null,
-      _rawRow: row.substring(0, 800),
-      _rawTds: tdsClean,
-      _dataAttrs: dataAttrs,
+      _debug: {
+        rawSerial: rawSerial,
+        td3: tdsClean[3] || "",
+        td2: tdsClean[2] || "",
+        allTds: tdsClean,
+        dataAttrs: dataAttrs,
+      },
     });
   }
 
