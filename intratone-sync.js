@@ -1,7 +1,5 @@
 // intratone-sync.js — Synchronisation automatique Intratone → Supabase
-// Flux : Login → connect.php → evts.php (id=114449) → evts_recup →
-//        Attendre → evts_list → Parser HTML → Insérer dans Supabase
-// Tourne en boucle (setInterval) sur Render, sans navigateur.
+// Flux corrigé : Login → connect.php → evts.php → evts_recup → Attendre → evts_infos (Refresh) → evts_list → Parser → Supabase
 
 const https = require("https");
 
@@ -11,13 +9,14 @@ const INTRATONE = {
   mdp: process.env.INTRATONE_PASSWORD || "",
   device: process.env.INTRATONE_DEVICE || "0d24dac0-647c-4853-bfab-deda515fd2a4",
   installationId: process.env.INTRATONE_INSTALLATION_ID || "114449",
+  recupId: process.env.INTRATONE_RECUP_ID || "91857", // ID du lecteur vu dans le HAR [cite: 26]
   host: "www.intratone.info",
 };
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 
-// Délai d'attente après "Récupérer" avant de lister (en ms)
+// Délai d'attente après "Récupérer" avant de rafraîchir et lister (en ms)
 const RECUP_WAIT_MS = parseInt(process.env.INTRATONE_RECUP_WAIT_MS || "45000", 10);
 
 // --- Helpers HTTP ---
@@ -63,7 +62,6 @@ function log(msg) {
   console.log(`[Intratone Sync] ${msg}`);
 }
 
-// Helper pour faire un POST authentifié vers Intratone
 function intratonePost(session, path, body) {
   body = body || `SID=${session.sid}`;
   return httpsRequest(
@@ -121,11 +119,9 @@ async function login() {
   const sid = cookies.PHPSESSID || cookies.Intratoneinfo;
 
   if (!sid) {
-    const text = res.body.toString("utf-8").substring(0, 300);
-    throw new Error(`Pas de session. Réponse: ${text}`);
+    throw new Error(`Pas de session obtenue lors du login.`);
   }
 
-  // Extraire le JWT depuis la réponse JSON
   let jwt = "";
   try {
     const loginJson = JSON.parse(res.body.toString("utf-8"));
@@ -139,64 +135,63 @@ async function login() {
     ...cookies,
   };
 
-  const rawLogin = res.body.toString("utf-8").substring(0, 500);
   log(`Connecté (SID: ${sid.substring(0, 10)}...)`);
-  return { sid, jwt, cookies: allCookies, _rawLogin: rawLogin };
+  return { sid, jwt, cookies: allCookies };
 }
 
-// --- Etape 2 : Initialiser la session (connect.php + evts.php) ---
+// --- Etape 2 : Initialiser la session ---
 
 async function initSession(session) {
-  // 2a. connect.php — initialise la session côté serveur
-  const connectRes = await intratonePost(session, "/fr/data/connect.php");
-  const connectText = connectRes.body.toString("utf-8");
-  if (connectRes.status !== 200 || connectText.includes('"type":-1')) {
-    log(`Avertissement connect.php: ${connectText.substring(0, 200)}`);
-  } else {
-    log("Session initialisée (connect.php OK)");
-  }
-
-  // 2b. events/evts.php — ouvre le module événements avec l'ID d'installation
+  await intratonePost(session, "/fr/data/connect.php");
+  
   const evtsBody = `id=${INTRATONE.installationId}&SID=${session.sid}`;
   const evtsRes = await intratonePost(session, "/fr/data/events/evts.php", evtsBody);
   const evtsText = evtsRes.body.toString("utf-8");
 
   if (evtsRes.status !== 200 || evtsText.includes('"type":-1')) {
-    throw new Error(`events/evts.php échoué: ${evtsText.substring(0, 200)}`);
+    throw new Error(`events/evts.php échoué`);
   }
-
-  log("Module événements ouvert (evts.php OK)");
+  log("Module événements ouvert");
 }
 
-// --- Etape 3 : Déclencher la récupération depuis la centrale ---
+// --- Etape 3 : Déclencher la récupération ---
 
 async function triggerRecup(session) {
-  const res = await intratonePost(session, "/fr/data/events/evts_recup.php");
+  const body = `id=${INTRATONE.recupId}`; // Utilise 918 [cite: 26]
+  const res = await intratonePost(session, "/fr/data/events/evts_recup.php", body);
   const text = res.body.toString("utf-8");
 
   if (res.status === 200 && !text.includes('"type":-1')) {
     log("Récupération déclenchée depuis la centrale");
     return true;
   }
-
-  // Pas critique si ça échoue — les événements déjà remontés seront quand même listés
-  log(`Avertissement evts_recup: ${text.substring(0, 150)} (non bloquant)`);
+  log(`Avertissement evts_recup: ${text.substring(0, 100)}`);
   return false;
 }
 
-// --- Etape 4 : Lister les événements ---
+// --- Etape 4 : Rafraîchir le buffer (Action "Actualiser" du HAR) ---
+
+async function refreshEventsBuffer(session) {
+  // Simule l'appel vu dans le HAR qui déclenche Evts_Infos [cite: 46, 71]
+  const res = await intratonePost(session, "/fr/data/events/evts_infos.php");
+  const text = res.body.toString("utf-8");
+
+  if (res.status === 200 && !text.includes('"type":-1')) {
+    log("Buffer serveur actualisé (evts_infos OK)");
+    return true;
+  }
+  return false;
+}
+
+// --- Etape 5 : Lister les événements ---
 
 async function fetchEventsList(session) {
   const res = await intratonePost(session, "/fr/data/events/evts_list.php");
-
-  if (res.status !== 200) {
-    throw new Error(`evts_list HTTP ${res.status}`);
-  }
-
+  if (res.status !== 200) throw new Error(`evts_list HTTP ${res.status}`);
   return res.body.toString("utf-8");
 }
 
-// --- Etape 5 : Parser le HTML des événements ---
+// --- Etape 6 : Parser le HTML ---
 
 function parseEventsHTML(rawJson) {
   let html = "";
@@ -210,22 +205,11 @@ function parseEventsHTML(rawJson) {
   if (!html) return [];
 
   const events = [];
-
-  // Découper par <tr (chaque ligne du tableau)
   const rows = html.split(/<tr[\s>]/i).slice(1);
 
   for (const row of rows) {
-    // Ignorer l'en-tête
     if (row.includes("<th")) continue;
 
-    // On a besoin de data-serial pour détecter les lignes badge, mais le vrai
-    // badge ID est dans td[3] (même format que la colonne "Qui" de l'Excel)
-    const serialMatch = row.match(/data-serial="([^"]+)"/);
-    if (!serialMatch) continue;
-    const rawSerial = serialMatch[1].trim();
-
-    // Extraire tous les <td>...</td>
-    // Le HTML Intratone utilise <\/td> (JSON-escaped) ou </td>
     const tds = [];
     const tdRegex = /<td[^>]*>([\s\S]*?)(?:<\/td>|<\\\/td>)/gi;
     let match;
@@ -235,287 +219,112 @@ function parseEventsHTML(rawJson) {
 
     if (tds.length < 5) continue;
 
-    // td[0] = icône, td[1] = date, td[2] = type, td[3] = badgeId (=Excel "Qui"), td[4] = nom
     const badgeId = tds[3].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim();
-    if (!badgeId) continue;
-    const dateRaw = tds[1]
-      .replace(/<[^>]*>/g, "")
-      .replace(/\\n/g, "")
-      .replace(/\\\//g, "/")
-      .trim();
+    const dateRaw = tds[1].replace(/<[^>]*>/g, "").replace(/\\n/g, "").replace(/\\\//g, "/").trim();
 
     const dateParts = dateRaw.match(/(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
     if (!dateParts) continue;
 
     const [, day, month, year, hour, minute] = dateParts;
-    // L'heure Intratone est en heure française (Europe/Paris)
-    // L'import Excel tourne dans le navigateur (timezone locale FR) donc
-    // new Date("...T11:59:00") → toISOString() = "...T10:59:00Z" (UTC-1 en hiver)
-    // Sur Render (UTC), on doit explicitement spécifier le fuseau FR
-    // CET = UTC+1 (hiver), CEST = UTC+2 (été)
-    // Déterminer si la date est en heure d'été (dernier dimanche mars → dernier dimanche octobre)
     const yr = parseInt(`20${year}`);
     const mo = parseInt(month);
     const dy = parseInt(day);
     const hr = parseInt(hour);
     const mi = parseInt(minute);
-    // Calcul simplifié : avril-octobre = été (+2), sinon hiver (+1)
-    // (approximation suffisante, les cas limites mars/octobre sont rares)
+
     const isSummer = mo >= 4 && mo <= 10;
     const offsetHours = isSummer ? 2 : 1;
     const fullDate = new Date(Date.UTC(yr, mo - 1, dy, hr - offsetHours, mi, 0));
+
     if (isNaN(fullDate.getTime())) continue;
-
-    const name = tds[4]
-      .replace(/<[^>]*>/g, "")
-      .replace(/\\n/g, "")
-      .trim();
-
-    // Extraire tous les data-* attributs de la ligne
-    const dataAttrs = {};
-    const dataRegex = /data-([a-z]+)="([^"]+)"/gi;
-    let dm;
-    while ((dm = dataRegex.exec(row)) !== null) {
-      dataAttrs[dm[1]] = dm[2];
-    }
-
-    // Nettoyer les tds pour le debug
-    const tdsClean = tds.map(td => td.replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim());
 
     events.push({
       badgeId,
       timestamp: fullDate.toISOString(),
-      name: name || null,
-      _debug: {
-        rawSerial: rawSerial,
-        td3: tdsClean[3] || "",
-        td2: tdsClean[2] || "",
-        allTds: tdsClean,
-        dataAttrs: dataAttrs,
-      },
+      name: tds[4].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim() || null
     });
   }
-
   return events;
 }
 
-// --- Etape 6 : Insérer dans Supabase (dédoublonnage) ---
+// --- Etape 7 : Supabase ---
 
 async function insertToSupabase(events) {
-  if (!events.length) return { inserted: 0 };
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    log("SUPABASE_URL ou SUPABASE_KEY manquant, skip insertion");
-    return { inserted: 0, error: "config manquante" };
-  }
+  if (!events.length || !SUPABASE_URL || !SUPABASE_KEY) return { inserted: 0 };
 
-  const BATCH_SIZE = 50;
-  let totalInserted = 0;
-  let totalErrors = 0;
-  let supabaseDebug = null;
+  const batch = events.map((e) => ({ "badgeId": e.badgeId, "timestamp": e.timestamp }));
+  const payload = JSON.stringify(batch);
+  const parsedUrl = new URL(SUPABASE_URL);
+  const restPath = parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/presences";
 
-  for (let i = 0; i < events.length; i += BATCH_SIZE) {
-    const batch = events.slice(i, i + BATCH_SIZE).map((e) => ({
-      "badgeId": e.badgeId,
-      "timestamp": e.timestamp,
-    }));
-
-    const payload = JSON.stringify(batch);
-    const parsedUrl = new URL(SUPABASE_URL);
-    const restPath = parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/presences";
-
-    if (i === 0) {
-      log(`Supabase POST → ${parsedUrl.hostname}${restPath} (${batch.length} lignes)`);
-    }
-
-    const res = await httpsRequest(
-      {
-        hostname: parsedUrl.hostname,
-        path: restPath + "?on_conflict=badgeId,timestamp",
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Prefer: "resolution=merge-duplicates,return=minimal",
-        },
+  const res = await httpsRequest(
+    {
+      hostname: parsedUrl.hostname,
+      path: restPath + "?on_conflict=badgeId,timestamp",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        Prefer: "resolution=merge-duplicates,return=minimal",
       },
-      payload
-    );
+    },
+    payload
+  );
 
-    if (res.status >= 200 && res.status < 300) {
-      totalInserted += batch.length;
-    } else {
-      totalErrors += batch.length;
-      const errText = res.body.toString("utf-8");
-      const errDetail = `HTTP ${res.status} - URL: ${parsedUrl.hostname}${restPath} - ${errText.substring(0, 300)}`;
-      log(`Erreur Supabase lot ${i / BATCH_SIZE + 1}: ${errDetail}`);
-      if (i === 0) supabaseDebug = errDetail;
-    }
-  }
-
-  return { inserted: totalInserted, errors: totalErrors, ...(supabaseDebug ? { errorDetail: supabaseDebug } : {}) };
+  return { inserted: res.status >= 200 && res.status < 300 ? batch.length : 0 };
 }
 
-// --- Etape 7 (optionnel) : Insérer dans SQLite local ---
-
-function insertToSQLite(db, events) {
-  return new Promise((resolve) => {
-    if (!db || !events.length) return resolve({ inserted: 0 });
-    // Vérifier que la table existe avant d'insérer
-    db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='presences'", (err, row) => {
-      if (err || !row) {
-        log("SQLite ignoré: table presences inexistante");
-        return resolve({ inserted: 0, error: "table presences inexistante" });
-      }
-      let inserted = 0;
-      const stmt = db.prepare("INSERT OR IGNORE INTO presences (badgeId, timestamp) VALUES (?, ?)");
-      for (const e of events) {
-        stmt.run(e.badgeId, e.timestamp, (runErr) => { if (!runErr) inserted++; });
-      }
-      stmt.finalize(() => resolve({ inserted }));
-    });
-  });
-}
-
-// --- Orchestrateur principal ---
+// --- Orchestrateur ---
 
 async function syncIntratone(db, options = {}) {
-  const debug = options.debug || false;
-  const debugInfo = { steps: [] };
-  const step = (name, detail) => {
-    log(`[${name}] ${typeof detail === "string" ? detail : JSON.stringify(detail).substring(0, 300)}`);
-    if (debug) debugInfo.steps.push({ name, detail: typeof detail === "string" ? detail : JSON.stringify(detail).substring(0, 500) });
-  };
-
   log("========== Début synchronisation ==========");
-  log(new Date().toISOString());
-
   try {
-    // 1. Login
-    step("config", `identifiant: [${INTRATONE.identifiant}] (len=${INTRATONE.identifiant.length}) mdp: [${INTRATONE.mdp.length} chars] device: ${INTRATONE.device.substring(0, 8)}...`);
     const session = await login();
-    step("login", `SID: ${session.sid.substring(0, 10)}... JWT: ${session.jwt ? "oui" : "non"} loginBody: ${session._rawLogin || "N/A"}`);
-
-    // 2. Initialiser la session (connect.php + ouvrir module événements)
     await initSession(session);
-    step("initSession", "OK");
 
-    // 3. Déclencher la récupération depuis la centrale physique
     const recupOk = await triggerRecup(session);
-    step("triggerRecup", recupOk ? "OK" : "échoué (non bloquant)");
 
-    // 4. Attendre que la centrale remonte les données (seulement si recup OK)
     if (recupOk) {
-      log(`Attente ${RECUP_WAIT_MS / 1000}s pour la remontée des données...`);
+      log(`Attente de ${RECUP_WAIT_MS / 1000}s...`);
       await wait(RECUP_WAIT_MS);
-      step("wait", `${RECUP_WAIT_MS / 1000}s`);
+      
+      // Nouvelle étape corrective issue du HAR 
+      await refreshEventsBuffer(session);
     }
 
-    // 5. Lister les événements
     const rawResponse = await fetchEventsList(session);
-    step("fetchEventsList", `Réponse brute: ${rawResponse.substring(0, 500)}`);
-
-    // 6. Parser le HTML
     const events = parseEventsHTML(rawResponse);
-    log(`${events.length} passage(s) badge détecté(s)`);
-    step("parseEventsHTML", `${events.length} événement(s) parsé(s)`);
+    log(`${events.length} événements trouvés`);
 
+    let supaResult = { inserted: 0 };
     if (events.length > 0) {
-      const lastEvent = events[events.length - 1];
-      const firstEvent = events[0];
-      log(`Premier: ${firstEvent.badgeId} → ${firstEvent.timestamp} (${firstEvent.name || "?"})`);
-      log(`Dernier: ${lastEvent.badgeId} → ${lastEvent.timestamp} (${lastEvent.name || "?"})`);
-      if (debug) {
-        debugInfo.firstEvent = firstEvent;
-        debugInfo.lastEvent = lastEvent;
-        debugInfo.sampleEvents = events.slice(0, 5);
-        debugInfo.rawFirstRow = events[0]._rawRow || null;
-        debugInfo.rawFirstTds = events[0]._rawTds || null;
-      }
+      supaResult = await insertToSupabase(events);
+      log(`Supabase: ${supaResult.inserted} traités`);
     }
 
-    if (events.length === 0) {
-      log("Rien à insérer.");
-      return { success: true, events: 0, ...(debug ? { debug: debugInfo } : {}) };
-    }
-
-    // 7. Insérer dans Supabase
-    const supaResult = await insertToSupabase(events);
-    log(`Supabase: ${supaResult.inserted} inséré(s), ${supaResult.errors || 0} erreur(s)`);
-    step("insertToSupabase", supaResult);
-
-    // 8. Insérer dans SQLite (si db fournie)
-    const sqliteResult = await insertToSQLite(db, events);
-    if (db) log(`SQLite: ${sqliteResult.inserted} inséré(s)`);
-
-    log("========== Synchronisation terminée ==========");
-    return { success: true, events: events.length, supabase: supaResult, sqlite: sqliteResult, ...(debug ? { debug: debugInfo } : {}) };
+    log("========== Fin synchronisation ==========");
+    return { success: true, events: events.length, supabase: supaResult };
   } catch (err) {
     log(`ERREUR: ${err.message}`);
-    step("error", err.message);
-    return { success: false, error: err.message, ...(debug ? { debug: debugInfo } : {}) };
+    return { success: false, error: err.message };
   }
 }
 
-// --- Démarrage planifié ---
+// --- Export & Planning ---
 
-let _currentIntervalMinutes = 15;
 let _intervalHandle = null;
-let _db = null;
-let _lastSync = null;
-let _lastResult = null;
 
 function startIntratoneSync(db, intervalMinutes = 15) {
-  _db = db;
-  _currentIntervalMinutes = intervalMinutes;
+  if (!INTRATONE.identifiant || !INTRATONE.mdp) return log("Config manquante.");
+  
+  log(`Sync planifiée: ${intervalMinutes} min`);
+  
+  // Premier lancement après 10s
+  setTimeout(() => syncIntratone(db), 10000);
 
-  if (!INTRATONE.identifiant || !INTRATONE.mdp) {
-    log("INTRATONE_EMAIL / INTRATONE_PASSWORD non configurés. Sync désactivée.");
-    return;
-  }
-
-  log(`Synchronisation planifiée toutes les ${intervalMinutes} min`);
-
-  // Première exécution 15s après le démarrage du serveur
-  setTimeout(async () => {
-    _lastSync = new Date().toISOString();
-    _lastResult = await syncIntratone(db);
-  }, 15000);
-
-  // Puis toutes les X minutes
-  _intervalHandle = setInterval(async () => {
-    _lastSync = new Date().toISOString();
-    _lastResult = await syncIntratone(db);
-  }, intervalMinutes * 60 * 1000);
+  _intervalHandle = setInterval(() => syncIntratone(db), intervalMinutes * 60 * 1000);
 }
 
-function getIntervalMinutes() {
-  return _currentIntervalMinutes;
-}
-
-function setIntervalMinutes(minutes) {
-  _currentIntervalMinutes = minutes;
-
-  // Relancer le timer avec le nouvel intervalle
-  if (_intervalHandle) {
-    clearInterval(_intervalHandle);
-  }
-
-  log(`Intervalle changé à ${minutes} min`);
-
-  _intervalHandle = setInterval(async () => {
-    _lastSync = new Date().toISOString();
-    _lastResult = await syncIntratone(_db);
-  }, minutes * 60 * 1000);
-}
-
-function getLastSync() {
-  return _lastSync;
-}
-
-function getLastResult() {
-  return _lastResult;
-}
-
-module.exports = { syncIntratone, startIntratoneSync, getIntervalMinutes, setIntervalMinutes, getLastSync, getLastResult };
+module.exports = { syncIntratone, startIntratoneSync };
