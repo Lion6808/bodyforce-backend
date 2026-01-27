@@ -291,5 +291,26 @@ async function syncIntratone() {
   }
 }
 
+
+// --- Execution automatique ---
+if (require.main === module) {
+  syncIntratone()
+    .then((res) => {
+      if (res.success) {
+        console.log("✅ Synchronisation réussie");
+        process.exit(0);
+      } else {
+        console.error("❌ Échec de la synchronisation:", res.error);
+        process.exit(1);
+      }
+    })
+    .catch((err) => {
+      console.error("💥 Erreur fatale:", err);
+      process.exit(1);
+    });
+}
+
+
+
 // --- Export pour CRON ---
 module.exports = { syncIntratone };
