@@ -277,6 +277,7 @@ async function insertToSupabase(events) {
   const BATCH_SIZE = 50;
   let totalInserted = 0;
   let totalErrors = 0;
+  let supabaseDebug = null;
 
   for (let i = 0; i < events.length; i += BATCH_SIZE) {
     const batch = events.slice(i, i + BATCH_SIZE).map((e) => ({
@@ -313,11 +314,13 @@ async function insertToSupabase(events) {
     } else {
       totalErrors += batch.length;
       const errText = res.body.toString("utf-8");
-      log(`Erreur Supabase lot ${i / BATCH_SIZE + 1}: HTTP ${res.status} - URL: ${parsedUrl.hostname}${restPath} - ${errText.substring(0, 300)}`);
+      const errDetail = `HTTP ${res.status} - URL: ${parsedUrl.hostname}${restPath} - ${errText.substring(0, 300)}`;
+      log(`Erreur Supabase lot ${i / BATCH_SIZE + 1}: ${errDetail}`);
+      if (i === 0) supabaseDebug = errDetail;
     }
   }
 
-  return { inserted: totalInserted, errors: totalErrors };
+  return { inserted: totalInserted, errors: totalErrors, ...(supabaseDebug ? { errorDetail: supabaseDebug } : {}) };
 }
 
 // --- Etape 7 (optionnel) : Insérer dans SQLite local ---
