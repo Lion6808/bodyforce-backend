@@ -301,14 +301,14 @@ async function insertToSupabase(events) {
     const res = await httpsRequest(
       {
         hostname: parsedUrl.hostname,
-        path: restPath,
+        path: restPath + "?on_conflict=badgeId,timestamp",
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(payload),
           apikey: SUPABASE_KEY,
           Authorization: `Bearer ${SUPABASE_KEY}`,
-          Prefer: "resolution=ignore-duplicates,return=minimal",
+          Prefer: "resolution=merge-duplicates,return=minimal",
         },
       },
       payload
