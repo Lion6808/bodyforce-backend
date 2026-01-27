@@ -260,10 +260,24 @@ function parseEventsHTML(rawJson) {
       .replace(/\\n/g, "")
       .trim();
 
+    // Extraire tous les data-* attributs de la ligne
+    const dataAttrs = {};
+    const dataRegex = /data-([a-z]+)="([^"]+)"/gi;
+    let dm;
+    while ((dm = dataRegex.exec(row)) !== null) {
+      dataAttrs[dm[1]] = dm[2];
+    }
+
+    // Nettoyer les tds pour le debug
+    const tdsClean = tds.map(td => td.replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim());
+
     events.push({
       badgeId,
       timestamp: fullDate.toISOString(),
       name: name || null,
+      _rawRow: row.substring(0, 800),
+      _rawTds: tdsClean,
+      _dataAttrs: dataAttrs,
     });
   }
 
@@ -401,6 +415,8 @@ async function syncIntratone(db, options = {}) {
         debugInfo.firstEvent = firstEvent;
         debugInfo.lastEvent = lastEvent;
         debugInfo.sampleEvents = events.slice(0, 5);
+        debugInfo.rawFirstRow = events[0]._rawRow || null;
+        debugInfo.rawFirstTds = events[0]._rawTds || null;
       }
     }
 
