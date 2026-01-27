@@ -8,6 +8,7 @@ const bcrypt = require("bcrypt");
 const fs = require("fs");
 const xlsx = require("xlsx");
 const { Resend } = require("resend");
+const { startIntratoneSync, syncIntratone, getIntervalMinutes, setIntervalMinutes, getLastSync, getLastResult } = require("./intratone-sync");
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -664,7 +665,37 @@ app.get("/api/email/status", isAdmin, (req, res) => {
   });
 });
 
+// --- Routes Intratone ---
+app.post("/api/intratone/sync", isAdmin, async (req, res) => {
+  try {
+    const result = await syncIntratone(db);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/intratone/status", isAdmin, (req, res) => {
+  res.json({
+    intervalMinutes: getIntervalMinutes(),
+    lastSync: getLastSync(),
+    lastResult: getLastResult(),
+  });
+});
+
+app.put("/api/intratone/interval", isAdmin, (req, res) => {
+  const { minutes } = req.body;
+  if (!minutes || typeof minutes !== "number" || minutes < 5 || minutes > 120) {
+    return res.status(400).json({ error: "Intervalle invalide (5-120 minutes)" });
+  }
+  setIntervalMinutes(minutes);
+  res.json({ success: true, intervalMinutes: minutes });
+});
+
 // --- Lancement Render-compatible ---
 app.listen(port, () => {
   console.log(`Serveur lancé sur le port ${port}`);
+
+  // Démarrer la sync automatique Intratone (toutes les 15 min)
+  startIntratoneSync(db, 15);
 });
