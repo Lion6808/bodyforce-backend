@@ -698,5 +698,5 @@ app.listen(port, () => {
   console.log(`Serveur lancé sur le port ${port}`);
 
   // Démarrer la sync automatique Intratone (toutes les 15 min)
-  startIntratoneSync(db, 5);
+  //startIntratoneSync(db, 5);
 });
