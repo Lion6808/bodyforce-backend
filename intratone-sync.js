@@ -316,7 +316,7 @@ async function syncIntratone(db, options = {}) {
 
 let _intervalHandle = null;
 
-function startIntratoneSync(db, intervalMinutes = 15) {
+function startIntratoneSync(db, intervalMinutes = 5) {
   if (!INTRATONE.identifiant || !INTRATONE.mdp) return log("Config manquante.");
   
   log(`Sync planifiée: ${intervalMinutes} min`);
