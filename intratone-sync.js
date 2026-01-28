@@ -233,12 +233,23 @@ function parseEventsHTML(rawJson) {
 
 // --- Étape 7 : Supabase ---
 async function insertToSupabase(events) {
-  if (!events.length || !SUPABASE_URL || !SUPABASE_KEY) return { inserted: 0 };
+  if (!events.length) {
+    log("Aucun événement à insérer");
+    return { inserted: 0 };
+  }
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    log("ERREUR: SUPABASE_URL ou SUPABASE_KEY non configuré !");
+    log(`  SUPABASE_URL: ${SUPABASE_URL ? "OK (" + SUPABASE_URL.substring(0, 30) + "...)" : "VIDE"}`);
+    log(`  SUPABASE_KEY: ${SUPABASE_KEY ? "OK (" + SUPABASE_KEY.substring(0, 10) + "...)" : "VIDE"}`);
+    return { inserted: 0 };
+  }
 
   const batch = events.map((e) => ({ badgeId: e.badgeId, timestamp: e.timestamp }));
   const payload = JSON.stringify(batch);
   const parsedUrl = new URL(SUPABASE_URL);
   const restPath = parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/presences";
+
+  log(`Insertion Supabase: ${batch.length} événements vers ${parsedUrl.hostname}${restPath}`);
 
   const res = await httpsRequest(
     {
@@ -256,7 +267,14 @@ async function insertToSupabase(events) {
     payload
   );
 
-  return { inserted: res.status >= 200 && res.status < 300 ? batch.length : 0 };
+  const responseBody = res.body.toString("utf-8");
+  if (res.status < 200 || res.status >= 300) {
+    log(`ERREUR Supabase HTTP ${res.status}: ${responseBody.substring(0, 300)}`);
+    return { inserted: 0 };
+  }
+
+  log(`Supabase HTTP ${res.status} OK`);
+  return { inserted: batch.length };
 }
 
 // --- Orchestrateur principal ---
