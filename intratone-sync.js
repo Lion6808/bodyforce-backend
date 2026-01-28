@@ -244,7 +244,19 @@ async function insertToSupabase(events) {
     return { inserted: 0 };
   }
 
-  const batch = events.map((e) => ({ badgeId: e.badgeId, timestamp: e.timestamp }));
+  // Dédupliquer par badgeId+timestamp (PostgreSQL refuse les doublons internes au même batch)
+  const seen = new Set();
+  const batch = [];
+  for (const e of events) {
+    const key = `${e.badgeId}|${e.timestamp}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      batch.push({ badgeId: e.badgeId, timestamp: e.timestamp });
+    }
+  }
+  if (batch.length < events.length) {
+    log(`${events.length - batch.length} doublons internes retirés du batch`);
+  }
   const payload = JSON.stringify(batch);
   const parsedUrl = new URL(SUPABASE_URL);
   const restPath = parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/presences";
