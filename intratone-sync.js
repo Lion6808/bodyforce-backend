@@ -20,7 +20,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 
 // Délai d'attente après "Récupérer" avant de rafraîchir et lister (en ms)
-const RECUP_WAIT_MS = parseInt(process.env.INTRATONE_RECUP_WAIT_MS || "120000", 10);
+const RECUP_WAIT_MS = parseInt(process.env.INTRATONE_RECUP_WAIT_MS || "180000", 10);
 
 // --- Helpers HTTP ---
 function httpsRequest(options, postData) {
