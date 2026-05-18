@@ -5,6 +5,8 @@
 // Description: Synchronisation automatique Intratone → Supabase (CRON-ready)
 
 const https = require("https");
+let webpush = null;
+try { webpush = require("web-push"); } catch (_) {}
 
 // --- Configuration (variables d'environnement) ---
 const INTRATONE = {
@@ -18,6 +20,14 @@ const INTRATONE = {
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
+
+const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || "";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
+const VAPID_EMAIL       = process.env.VAPID_EMAIL       || "mailto:admin@bodyforce.fr";
+
+if (webpush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
 
 // Délai d'attente après "Récupérer" avant de rafraîchir et lister (en ms)
 const RECUP_WAIT_MS = parseInt(process.env.INTRATONE_RECUP_WAIT_MS || "180000", 10);
@@ -231,6 +241,40 @@ function parseEventsHTML(rawJson) {
   return events;
 }
 
+// --- Helpers Supabase REST (GET / DELETE) ---
+function supabaseRestRequest(method, path, queryString, body) {
+  const parsedUrl = new URL(SUPABASE_URL);
+  const restPath =
+    parsedUrl.pathname.replace(/\/+$/, "") + "/rest/v1/" + path + (queryString ? "?" + queryString : "");
+  const payload = body ? JSON.stringify(body) : undefined;
+  return httpsRequest(
+    {
+      hostname: parsedUrl.hostname,
+      path: restPath,
+      method,
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        Accept: "application/json",
+        ...(payload ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } : {}),
+      },
+    },
+    payload
+  );
+}
+
+async function supabaseGet(table, queryString) {
+  const res = await supabaseRestRequest("GET", table, queryString);
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Supabase GET ${table} HTTP ${res.status}: ${res.body.toString("utf-8").substring(0, 200)}`);
+  }
+  return JSON.parse(res.body.toString("utf-8"));
+}
+
+async function supabaseDelete(table, queryString) {
+  await supabaseRestRequest("DELETE", table, queryString);
+}
+
 // --- Étape 7 : Supabase ---
 async function insertToSupabase(events) {
   if (!events.length) {
@@ -289,6 +333,83 @@ async function insertToSupabase(events) {
   return { inserted: batch.length };
 }
 
+// --- Notifications push : rappel de fin d'entraînement (1h30) ---
+async function sendWorkoutNotifications() {
+  if (!webpush || !VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+
+  try {
+    const now = new Date();
+    const from = new Date(now.getTime() - 95 * 60 * 1000).toISOString();
+    const to   = new Date(now.getTime() - 85 * 60 * 1000).toISOString();
+
+    // Présences sans end_time dans la fenêtre 85-95 min
+    const presences = await supabaseGet(
+      "presences",
+      `timestamp=gte.${encodeURIComponent(from)}&timestamp=lte.${encodeURIComponent(to)}&end_time=is.null&select=badgeId,timestamp`
+    );
+
+    if (!presences.length) {
+      log("Notifications: aucune présence dans la fenêtre 85-95 min");
+      return;
+    }
+
+    log(`Notifications: ${presences.length} présence(s) à traiter`);
+
+    for (const presence of presences) {
+      const { badgeId, timestamp } = presence;
+      if (!badgeId) continue;
+
+      // Trouver le membre via badge_history avec filtre date (règle critique)
+      const bhRows = await supabaseGet(
+        "badge_history",
+        `badge_real_id=eq.${encodeURIComponent(badgeId)}&date_attribution=lte.${encodeURIComponent(timestamp)}&select=member_id,date_fin&order=date_attribution.desc&limit=10`
+      );
+      const ts = new Date(timestamp).getTime();
+      const bh = bhRows.find(
+        (row) => !row.date_fin || new Date(row.date_fin).getTime() >= ts
+      );
+      if (!bh) {
+        log(`Notifications: aucun membre trouvé pour badge ${badgeId}`);
+        continue;
+      }
+
+      // Subscriptions push du membre
+      const subs = await supabaseGet(
+        "push_subscriptions",
+        `member_id=eq.${bh.member_id}&select=endpoint,p256dh,auth`
+      );
+      if (!subs.length) continue;
+
+      const payload = JSON.stringify({
+        title: "BodyForce — Fin d'entraînement ?",
+        body: "Tu es en salle depuis 1h30. C'est terminé ?",
+        data: { badgeId, timestamp },
+      });
+
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload
+          );
+          log(`Notification envoyée → membre ${bh.member_id}`);
+        } catch (err) {
+          log(`Erreur push membre ${bh.member_id}: ${err.message}`);
+          if (err.statusCode === 410) {
+            await supabaseDelete(
+              "push_subscriptions",
+              `endpoint=eq.${encodeURIComponent(sub.endpoint)}`
+            );
+          }
+        }
+      }
+    }
+  } catch (err) {
+    log(`Erreur sendWorkoutNotifications: ${err.message}`);
+  }
+}
+
 // --- Orchestrateur principal ---
 async function syncIntratone() {
   log("========== Début synchronisation ==========");
@@ -313,6 +434,7 @@ async function syncIntratone() {
       log(`Supabase: ${supaResult.inserted} traités`);
     }
 
+    await sendWorkoutNotifications();
     log("========== Fin synchronisation ==========");
     return { success: true, events: events.length, supabase: supaResult };
   } catch (err) {
