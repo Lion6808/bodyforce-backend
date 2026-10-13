@@ -232,10 +232,15 @@ function parseEventsHTML(rawJson) {
     const fullDate = new Date(Date.UTC(yr, mo - 1, dy, hr - offsetHours, mi, 0));
     if (isNaN(fullDate.getTime())) continue;
 
+    // Colonne 1 : icône du lecteur — ok.gif = accès ouvert, ko.png = badge refusé.
+    // Seul ko.png explicite vaut refus (une icône inconnue ne doit pas tout marquer refusé).
+    const accepte = !/ko\.png/i.test(tds[0]);
+
     events.push({
       badgeId,
       timestamp: fullDate.toISOString(),
       name: tds[4].replace(/<[^>]*>/g, "").replace(/\\n/g, "").trim() || null,
+      accepte,
     });
   }
   return events;
@@ -289,13 +294,18 @@ async function insertToSupabase(events) {
   }
 
   // Dédupliquer par badgeId+timestamp (PostgreSQL refuse les doublons internes au même batch)
-  const seen = new Set();
+  // (deux lectures dans la même minute : acceptée si l'une des deux l'a été)
+  const seen = new Map();
   const batch = [];
   for (const e of events) {
     const key = `${e.badgeId}|${e.timestamp}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      batch.push({ badgeId: e.badgeId, timestamp: e.timestamp });
+    const prev = seen.get(key);
+    if (prev) {
+      prev.accepte = prev.accepte || e.accepte;
+    } else {
+      const row = { badgeId: e.badgeId, timestamp: e.timestamp, accepte: e.accepte };
+      seen.set(key, row);
+      batch.push(row);
     }
   }
   if (batch.length < events.length) {
@@ -346,7 +356,7 @@ async function sendWorkoutNotifications() {
     // Présences sans end_time dans la fenêtre 85-95 min
     const presences = await supabaseGet(
       "presences",
-      `timestamp=gte.${encodeURIComponent(from)}&timestamp=lte.${encodeURIComponent(to)}&end_time=is.null&select=badgeId,timestamp`
+      `timestamp=gte.${encodeURIComponent(from)}&timestamp=lte.${encodeURIComponent(to)}&end_time=is.null&accepte=is.true&select=badgeId,timestamp`
     );
 
     if (!presences.length) {
