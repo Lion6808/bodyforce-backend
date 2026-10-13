@@ -31,6 +31,7 @@ if (webpush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 
 // Délai d'attente après "Récupérer" avant de rafraîchir et lister (en ms)
 const RECUP_WAIT_MS = parseInt(process.env.INTRATONE_RECUP_WAIT_MS || "180000", 10);
+const BACKFILL_PAGES = parseInt(process.env.INTRATONE_BACKFILL_PAGES || "0", 10);
 
 // --- Helpers HTTP ---
 function httpsRequest(options, postData) {
@@ -420,6 +421,36 @@ async function sendWorkoutNotifications() {
   }
 }
 
+// --- Rattrapage des passages refusés sur les pages 2..N de la liste ---
+// N'envoie QUE les refusés : l'upsert passe accepte=false sur la ligne existante
+// (ou l'ajoute, sans effet sur les stats). Les acceptés ne sont jamais renvoyés,
+// pour ne pas réinsérer d'anciens passages supprimés volontairement.
+async function backfillRefused(session, maxPages) {
+  log(`Rattrapage des refus : pages 2 à ${maxPages}`);
+  const refused = [];
+  let scanned = 0;
+  for (let page = 2; page <= maxPages; page++) {
+    const res = await intratonePost(session, "/fr/data/events/evts_list.php", `epag=${page}&SID=${session.sid}`);
+    if (res.status !== 200) {
+      log(`Rattrapage : page ${page} HTTP ${res.status}, arrêt`);
+      break;
+    }
+    const events = parseEventsHTML(res.body.toString("utf-8"));
+    if (!events.length) {
+      log(`Rattrapage : page ${page} vide, fin de liste`);
+      break;
+    }
+    scanned += events.length;
+    refused.push(...events.filter((e) => !e.accepte));
+    await wait(300);
+  }
+  log(`Rattrapage : ${scanned} événements lus, ${refused.length} refusé(s)`);
+  if (refused.length) {
+    const r = await insertToSupabase(refused);
+    log(`Rattrapage : ${r.inserted} refus enregistrés`);
+  }
+}
+
 // --- Orchestrateur principal ---
 async function syncIntratone() {
   log("========== Début synchronisation ==========");
@@ -445,6 +476,11 @@ async function syncIntratone() {
     }
 
     await sendWorkoutNotifications();
+
+    // Rattrapage ponctuel des refus anciens : INTRATONE_BACKFILL_PAGES=N
+    // (variable à poser le temps d'un run puis à retirer sur Render)
+    if (BACKFILL_PAGES > 1) await backfillRefused(session, BACKFILL_PAGES);
+
     log("========== Fin synchronisation ==========");
     return { success: true, events: events.length, supabase: supaResult };
   } catch (err) {
