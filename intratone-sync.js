@@ -194,6 +194,23 @@ async function fetchEventsList(session) {
   return res.body.toString("utf-8");
 }
 
+// Décalage de Paris (minutes) à un instant donné : heure d'été du dernier dimanche
+// de mars au dernier dimanche d'octobre, pas d'avril à octobre.
+const parisOffsetFmt = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/Paris", timeZoneName: "longOffset" });
+function parisOffsetMinutes(ms) {
+  const tz = parisOffsetFmt.formatToParts(new Date(ms)).find((p) => p.type === "timeZoneName").value;
+  const m = tz.match(/([+-])(\d{2}):(\d{2})/); // "GMT+02:00" ("GMT" seul = +0)
+  return m ? (m[1] === "-" ? -1 : 1) * (parseInt(m[2]) * 60 + parseInt(m[3])) : 0;
+}
+
+// Heure affichée par Intratone (heure de Paris) -> Date UTC
+function parisToUtc(yr, mo, dy, hr, mi) {
+  const asUtc = Date.UTC(yr, mo - 1, dy, hr, mi, 0);
+  // Deuxième passe : corrige l'estimation quand le changement d'heure tombe entre les deux
+  const first = asUtc - parisOffsetMinutes(asUtc) * 60000;
+  return new Date(asUtc - parisOffsetMinutes(first) * 60000);
+}
+
 // --- Étape 6 : Parser le HTML ---
 function parseEventsHTML(rawJson) {
   let html = "";
@@ -222,15 +239,9 @@ function parseEventsHTML(rawJson) {
     const dateParts = dateRaw.match(/(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
     if (!dateParts) continue;
     const [, day, month, year, hour, minute] = dateParts;
-    const yr = parseInt(`20${year}`);
-    const mo = parseInt(month);
-    const dy = parseInt(day);
-    const hr = parseInt(hour);
-    const mi = parseInt(minute);
-
-    const isSummer = mo >= 4 && mo <= 10;
-    const offsetHours = isSummer ? 2 : 1;
-    const fullDate = new Date(Date.UTC(yr, mo - 1, dy, hr - offsetHours, mi, 0));
+    const fullDate = parisToUtc(
+      parseInt(`20${year}`), parseInt(month), parseInt(day), parseInt(hour), parseInt(minute)
+    );
     if (isNaN(fullDate.getTime())) continue;
 
     // Colonne 1 : icône du lecteur — ok.gif = accès ouvert, ko.png = badge refusé.
@@ -291,7 +302,8 @@ async function insertToSupabase(events) {
     log("ERREUR: SUPABASE_URL ou SUPABASE_KEY non configuré !");
     log(`  SUPABASE_URL: ${SUPABASE_URL ? "OK (" + SUPABASE_URL.substring(0, 30) + "...)" : "VIDE"}`);
     log(`  SUPABASE_KEY: ${SUPABASE_KEY ? "OK (" + SUPABASE_KEY.substring(0, 10) + "...)" : "VIDE"}`);
-    return { inserted: 0 };
+    // Échec franc : le CRON doit passer en rouge sur Render, pas rester vert
+    throw new Error("SUPABASE_URL ou SUPABASE_KEY non configuré");
   }
 
   // Dédupliquer par badgeId+timestamp (PostgreSQL refuse les doublons internes au même batch)
@@ -337,7 +349,7 @@ async function insertToSupabase(events) {
   const responseBody = res.body.toString("utf-8");
   if (res.status < 200 || res.status >= 300) {
     log(`ERREUR Supabase HTTP ${res.status}: ${responseBody.substring(0, 300)}`);
-    return { inserted: 0 };
+    throw new Error(`Insertion Supabase refusée (HTTP ${res.status})`);
   }
 
   log(`Supabase HTTP ${res.status} OK`);
@@ -351,17 +363,18 @@ async function sendWorkoutNotifications() {
 
   try {
     const now = new Date();
-    const from = new Date(now.getTime() - 95 * 60 * 1000).toISOString();
+    const from = new Date(now.getTime() - 90 * 60 * 1000).toISOString();
     const to   = new Date(now.getTime() - 85 * 60 * 1000).toISOString();
 
-    // Présences sans end_time dans la fenêtre 85-95 min
+    // Présences sans end_time dans la fenêtre ]90, 85] min : 5 min = période du CRON,
+    // pour que chaque passage soit notifié une seule fois
     const presences = await supabaseGet(
       "presences",
-      `timestamp=gte.${encodeURIComponent(from)}&timestamp=lte.${encodeURIComponent(to)}&end_time=is.null&accepte=is.true&select=badgeId,timestamp`
+      `timestamp=gt.${encodeURIComponent(from)}&timestamp=lte.${encodeURIComponent(to)}&end_time=is.null&accepte=is.true&select=badgeId,timestamp`
     );
 
     if (!presences.length) {
-      log("Notifications: aucune présence dans la fenêtre 85-95 min");
+      log("Notifications: aucune présence dans la fenêtre 85-90 min");
       return;
     }
 
@@ -511,4 +524,4 @@ if (require.main === module) {
 
 
 // --- Export pour CRON ---
-module.exports = { syncIntratone };
+module.exports = { syncIntratone, parseEventsHTML };
